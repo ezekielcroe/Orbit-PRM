@@ -1,0 +1,159 @@
+import Foundation
+import CoreSpotlight
+import SwiftData
+
+// MARK: - SpotlightIndexer
+// Indexes Orbit contacts into CoreSpotlight so they appear in
+// system-wide search (Spotlight on iOS/macOS).
+//
+// Design decisions:
+// - Index contact name, orbit zone, tags, and key artifact values
+// - Re-index on contact save/modify, de-index on archive/delete
+// - Use contact UUID as the unique Spotlight identifier
+// - Batch operations for initial indexing after import
+
+@Observable
+final class SpotlightIndexer {
+
+    private let searchableIndex = CSSearchableIndex.default()
+    static let domainIdentifier = "com.orbit.contacts"
+
+    // MARK: - Index a Single Contact
+
+    func index(contact: Contact) {
+        let attributeSet = CSSearchableItemAttributeSet(contentType: .contact)
+
+        // Display info
+        attributeSet.displayName = contact.name
+        attributeSet.contentDescription = buildDescription(for: contact)
+
+        // Keywords from tags and artifact values
+        var keywords = contact.tags.map(\.name)
+        keywords.append(contact.orbitZoneName)
+        for artifact in contact.artifacts {
+            keywords.append(artifact.key)
+            if !artifact.isArray {
+                keywords.append(artifact.value)
+            }
+        }
+        attributeSet.keywords = keywords
+
+        // Searchable metadata
+        attributeSet.supportsNavigation = true
+
+        let item = CSSearchableItem(
+            uniqueIdentifier: contact.id.uuidString,
+            domainIdentifier: SpotlightIndexer.domainIdentifier,
+            attributeSet: attributeSet
+        )
+
+        // Items expire after 6 months of no update — long enough for distant orbits
+        item.expirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date())
+
+        searchableIndex.indexSearchableItems([item]) { error in
+            if let error {
+                print("Spotlight indexing error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Remove a Contact from Index
+
+    func deindex(contact: Contact) {
+        searchableIndex.deleteSearchableItems(
+            withIdentifiers: [contact.id.uuidString]
+        ) { error in
+            if let error {
+                print("Spotlight de-indexing error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Batch Index All Contacts
+
+    func reindexAll(from context: ModelContext) {
+        // First, clear all existing items
+        searchableIndex.deleteSearchableItems(
+            withDomainIdentifiers: [SpotlightIndexer.domainIdentifier]
+        ) { [weak self] error in
+            if let error {
+                print("Spotlight clear error: \(error.localizedDescription)")
+                return
+            }
+
+            // Re-index all non-archived contacts
+            let predicate = #Predicate<Contact> { !$0.isArchived }
+            let descriptor = FetchDescriptor<Contact>(predicate: predicate)
+
+            guard let contacts = try? context.fetch(descriptor) else { return }
+
+            let items = contacts.map { contact -> CSSearchableItem in
+                let attributeSet = CSSearchableItemAttributeSet(contentType: .contact)
+                attributeSet.displayName = contact.name
+                attributeSet.contentDescription = self?.buildDescription(for: contact)
+
+                var keywords = contact.tags.map(\.name)
+                keywords.append(contact.orbitZoneName)
+                attributeSet.keywords = keywords
+
+                let item = CSSearchableItem(
+                    uniqueIdentifier: contact.id.uuidString,
+                    domainIdentifier: SpotlightIndexer.domainIdentifier,
+                    attributeSet: attributeSet
+                )
+                item.expirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date())
+                return item
+            }
+
+            self?.searchableIndex.indexSearchableItems(items) { error in
+                if let error {
+                    print("Spotlight batch indexing error: \(error.localizedDescription)")
+                } else {
+                    print("Spotlight: indexed \(items.count) contacts")
+                }
+            }
+        }
+    }
+
+    // MARK: - Handle Spotlight Tap
+    // When a user taps a Spotlight result, the app receives the contact's UUID.
+    // The app delegate or scene delegate should call this to resolve the contact.
+
+    static func contactID(from userActivity: NSUserActivity) -> UUID? {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else {
+            return nil
+        }
+        return UUID(uuidString: identifier)
+    }
+
+    // MARK: - Helpers
+
+    private func buildDescription(for contact: Contact) -> String {
+        var parts: [String] = []
+
+        parts.append(contact.orbitZoneName)
+
+        if let days = contact.daysSinceLastContact {
+            parts.append("Last contact: \(days)d ago")
+        }
+
+        let tagNames = contact.tags.prefix(3).map { "#\($0.name)" }.joined(separator: " ")
+        if !tagNames.isEmpty {
+            parts.append(tagNames)
+        }
+
+        // Add key artifacts for context
+        let keyArtifacts = contact.artifacts
+            .filter { ["company", "city", "role", "spouse"].contains($0.searchableKey) }
+            .prefix(2)
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: " · ")
+
+        if !keyArtifacts.isEmpty {
+            parts.append(keyArtifacts)
+        }
+
+        return parts.joined(separator: " · ")
+    }
+}
