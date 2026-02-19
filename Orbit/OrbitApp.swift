@@ -9,6 +9,9 @@ import CoreSpotlight
 // - macOS menu commands enabled
 // - Handles Spotlight continuation (user taps a search result)
 // - Graceful error handling for ModelContainer initialization
+//
+// FIX 2: macOS Settings scene passes environment objects and uses
+//        a wider default frame. SettingsView itself handles the TabView.
 
 @main
 struct OrbitApp: App {
@@ -79,7 +82,8 @@ struct OrbitApp: App {
         Settings {
             SettingsView()
                 .modelContainer(container)
-                .frame(minWidth: 500, minHeight: 400)
+                .environment(dataValidator)
+                .frame(minWidth: 520, minHeight: 420)
         }
         #endif
     }

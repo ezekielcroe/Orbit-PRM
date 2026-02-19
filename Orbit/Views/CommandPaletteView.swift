@@ -247,6 +247,7 @@ struct CommandPaletteView: View {
                 syntaxHelpRow("@Tom > wife: Elena", "Set Tom's wife to Elena")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
                 syntaxHelpRow("@Sarah !Meeting #Work \"Discussed merger\"", "Detailed log with tag and note")
+                syntaxHelpRow("@Sarah", "Open Sarah's contact page")
                 syntaxHelpRow("!undo", "Undo the last logged interaction")
             }
         }
@@ -400,6 +401,20 @@ struct CommandPaletteView: View {
 
     private func executeCommand() {
         let command = parser.parse(inputText)
+
+        // FIX 1: Handle navigation directly in the UI layer.
+        // The executor is for data mutations; navigation is a UI concern.
+        if case .searchContact(let name, _) = command {
+            if let contact = executor.findContact(named: name, in: modelContext) {
+                onNavigateToContact?(contact)
+                isPresented = false
+            } else {
+                resultMessage = "Contact '\(name)' not found."
+                resultIsError = true
+            }
+            return
+        }
+
         let result = executor.execute(command, in: modelContext)
 
         resultMessage = result.message

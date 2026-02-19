@@ -8,6 +8,9 @@ import Contacts
 // Central hub for data management, export, import, and app preferences.
 // Accessible from the sidebar. Emphasizes data ownership — export and
 // import are first-class citizens, not buried in submenus.
+//
+// FIX 2: macOS uses a TabView for native Settings-window appearance.
+// FIX 3: Import uses a two-step preview flow with contact selection.
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -29,11 +32,87 @@ struct SettingsView: View {
     @State private var contactsAccessStatus: String = "Not checked"
     @State private var showOpenSettingsAlert = false
 
+    // FIX 3: Import preview state
+    @State private var showImportPreview = false
+    @State private var importableContacts: [ImportableContact] = []
+    @State private var isFetchingContacts = false
+
     #if os(iOS)
     @State private var showShareSheet = false
     #endif
 
     var body: some View {
+        settingsContent
+            .alert("Import Complete", isPresented: $showImportResults) {
+                Button("OK") {}
+            } message: {
+                Text(importResultMessage)
+            }
+            .alert("Delete All Data", isPresented: $showDeleteConfirmation) {
+                Button("Delete Everything", role: .destructive) {
+                    deleteAllData()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This action cannot be undone.")
+            }
+            .alert("Contacts Access Required", isPresented: $showOpenSettingsAlert) {
+                Button("Open Settings") {
+                    #if os(iOS)
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                    #else
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    #endif
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You previously declined Contacts access. To import contacts, open Settings and enable Contacts permission for Orbit.")
+            }
+            .sheet(isPresented: $showImportPreview) {
+                ImportPreviewSheet(
+                    importableContacts: $importableContacts,
+                    onImport: { selectedContacts, defaultOrbit in
+                        importSelectedContacts(selectedContacts, defaultOrbit: defaultOrbit)
+                    }
+                )
+            }
+    }
+
+    // MARK: - Platform-Adaptive Layout
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        #if os(macOS)
+        TabView {
+            Form {
+                dataOverviewSection
+                aboutSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("General", systemImage: "gear") }
+            .tag(0)
+
+            Form {
+                exportSection
+                importSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Data", systemImage: "externaldrive") }
+            .tag(1)
+
+            Form {
+                dataManagementSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
+            .tag(2)
+        }
+        .frame(minWidth: 480)
+        #else
         Form {
             dataOverviewSection
             exportSection
@@ -42,38 +121,8 @@ struct SettingsView: View {
             aboutSection
         }
         .navigationTitle("Settings")
-        #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
         #endif
-        .alert("Import Complete", isPresented: $showImportResults) {
-            Button("OK") {}
-        } message: {
-            Text(importResultMessage)
-        }
-        .alert("Delete All Data", isPresented: $showDeleteConfirmation) {
-            Button("Delete Everything", role: .destructive) {
-                deleteAllData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This action cannot be undone.")
-        }
-        .alert("Contacts Access Required", isPresented: $showOpenSettingsAlert) {
-            Button("Open Settings") {
-                #if os(iOS)
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-                #else
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
-                    NSWorkspace.shared.open(url)
-                }
-                #endif
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You previously declined Contacts access. To import contacts, open Settings and enable Contacts permission for Orbit.")
-        }
     }
 
     // MARK: - Data Overview
@@ -135,7 +184,17 @@ struct SettingsView: View {
             } label: {
                 Label("Import from Contacts", systemImage: "person.crop.rectangle.stack")
             }
-            .disabled(isImporting)
+            .disabled(isFetchingContacts || isImporting)
+
+            if isFetchingContacts {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading contacts…")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if isImporting {
                 HStack {
@@ -149,7 +208,7 @@ struct SettingsView: View {
         } header: {
             Text("Import")
         } footer: {
-            Text("Imports names from your system Contacts. Orbit does not sync ongoing changes — it's a one-time import to seed your relationship map. Duplicates are skipped.")
+            Text("Imports names from your system Contacts. You'll be able to review and select which contacts to import before committing. Duplicates are detected automatically.")
         }
     }
 
@@ -260,7 +319,7 @@ struct SettingsView: View {
         #endif
     }
 
-    // MARK: - Import Actions
+    // MARK: - Import Actions (FIX 3: Two-step flow)
 
     private func checkContactsAccess() {
         #if canImport(Contacts)
@@ -268,16 +327,14 @@ struct SettingsView: View {
 
         switch status {
         case .authorized, .limited:
-            // Already have access — import directly
-            importFromSystemContacts()
+            fetchSystemContacts()
 
         case .notDetermined:
-            // First time — show the system prompt
             let store = CNContactStore()
             store.requestAccess(for: .contacts) { granted, error in
                 DispatchQueue.main.async {
                     if granted {
-                        importFromSystemContacts()
+                        fetchSystemContacts()
                     } else {
                         importResultMessage = "Orbit needs Contacts access to import. You can grant this in Settings."
                         showImportResults = true
@@ -286,7 +343,6 @@ struct SettingsView: View {
             }
 
         case .denied, .restricted:
-            // Previously denied — system won't re-prompt, so direct to Settings
             showOpenSettingsAlert = true
 
         @unknown default:
@@ -299,11 +355,11 @@ struct SettingsView: View {
         #endif
     }
 
-    private func importFromSystemContacts() {
+    /// Step 1: Fetch system contacts and present the preview sheet
+    private func fetchSystemContacts() {
         #if canImport(Contacts)
-        isImporting = true
+        isFetchingContacts = true
 
-        // Collect contacts on a background thread, then insert on main
         Task.detached {
             let store = CNContactStore()
             let keysToFetch: [CNKeyDescriptor] = [
@@ -318,20 +374,17 @@ struct SettingsView: View {
                 CNContactJobTitleKey as CNKeyDescriptor,
             ]
 
-            struct ImportedContact {
-                let name: String
-                let birthday: String?
-                let company: String?
-                let role: String?
-                let email: String?
-                let phone: String?
-                let city: String?
-            }
-
-            var collected: [ImportedContact] = []
+            var collected: [ImportableContact] = []
             let request = CNContactFetchRequest(keysToFetch: keysToFetch)
 
             do {
+                // Get existing names for duplicate detection
+                let existingNames: Set<String> = await MainActor.run {
+                    let descriptor = FetchDescriptor<Contact>()
+                    let existing = (try? modelContext.fetch(descriptor)) ?? []
+                    return Set(existing.map(\.searchableName))
+                }
+
                 try store.enumerateContacts(with: request) { cnContact, _ in
                     let fullName = [cnContact.givenName, cnContact.familyName]
                         .filter { !$0.isEmpty }
@@ -345,7 +398,9 @@ struct SettingsView: View {
                         return String(format: "%02d/%02d", month, day)
                     }()
 
-                    collected.append(ImportedContact(
+                    let isDuplicate = existingNames.contains(fullName.lowercased())
+
+                    collected.append(ImportableContact(
                         name: fullName,
                         birthday: birthday,
                         company: cnContact.organizationName.isEmpty ? nil : cnContact.organizationName,
@@ -355,76 +410,84 @@ struct SettingsView: View {
                         city: {
                             guard let addr = cnContact.postalAddresses.first?.value else { return nil }
                             return addr.city.isEmpty ? nil : addr.city
-                        }()
+                        }(),
+                        isSelected: !isDuplicate,
+                        isDuplicate: isDuplicate
                     ))
                 }
 
-                // Insert into SwiftData on the main actor
-                await MainActor.run { [collected] in
-                    let existingDescriptor = FetchDescriptor<Contact>()
-                    let existingContacts = (try? modelContext.fetch(existingDescriptor)) ?? []
-                    let existingNames = Set(existingContacts.map(\.searchableName))
-
-                    var imported = 0
-                    var skipped = 0
-
-                    for item in collected {
-                        if existingNames.contains(item.name.lowercased()) {
-                            skipped += 1
-                            continue
-                        }
-
-                        let contact = Contact(name: item.name, targetOrbit: 3)
-                        modelContext.insert(contact)
-
-                        if let birthday = item.birthday {
-                            let a = Artifact(key: "birthday", value: birthday)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-                        if let company = item.company {
-                            let a = Artifact(key: "company", value: company)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-                        if let role = item.role {
-                            let a = Artifact(key: "role", value: role)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-                        if let email = item.email {
-                            let a = Artifact(key: "email", value: email)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-                        if let phone = item.phone {
-                            let a = Artifact(key: "phone", value: phone)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-                        if let city = item.city {
-                            let a = Artifact(key: "city", value: city)
-                            a.contact = contact
-                            modelContext.insert(a)
-                        }
-
-                        imported += 1
+                // Sort: non-duplicates first, then alphabetically
+                collected.sort { a, b in
+                    if a.isDuplicate != b.isDuplicate {
+                        return !a.isDuplicate
                     }
+                    return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                }
 
-                    importResultMessage = "Imported \(imported) contact\(imported == 1 ? "" : "s"). \(skipped > 0 ? "Skipped \(skipped) duplicate\(skipped == 1 ? "" : "s")." : "")"
-                    showImportResults = true
-                    isImporting = false
+                let result = collected
+                await MainActor.run {
+                    importableContacts = result
+                    isFetchingContacts = false
+                    showImportPreview = true
                 }
 
             } catch {
                 await MainActor.run {
-                    importResultMessage = "Import failed: \(error.localizedDescription)"
+                    importResultMessage = "Failed to read contacts: \(error.localizedDescription)"
                     showImportResults = true
-                    isImporting = false
+                    isFetchingContacts = false
                 }
             }
         }
         #endif
+    }
+
+    /// Step 2: Import only the selected contacts with the chosen orbit zone
+    private func importSelectedContacts(_ selected: [ImportableContact], defaultOrbit: Int) {
+        isImporting = true
+
+        var imported = 0
+        for item in selected {
+            let contact = Contact(name: item.name, targetOrbit: defaultOrbit)
+            modelContext.insert(contact)
+
+            if let birthday = item.birthday {
+                let a = Artifact(key: "birthday", value: birthday)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+            if let company = item.company {
+                let a = Artifact(key: "company", value: company)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+            if let role = item.role {
+                let a = Artifact(key: "role", value: role)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+            if let email = item.email {
+                let a = Artifact(key: "email", value: email)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+            if let phone = item.phone {
+                let a = Artifact(key: "phone", value: phone)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+            if let city = item.city {
+                let a = Artifact(key: "city", value: city)
+                a.contact = contact
+                modelContext.insert(a)
+            }
+
+            imported += 1
+        }
+
+        importResultMessage = "Imported \(imported) contact\(imported == 1 ? "" : "s")."
+        showImportResults = true
+        isImporting = false
     }
 
     // MARK: - Data Management Actions
@@ -476,5 +539,243 @@ struct StatRow: View {
                 .font(OrbitTypography.bodyMedium)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Importable Contact Model
+
+struct ImportableContact: Identifiable {
+    let id = UUID()
+    let name: String
+    let birthday: String?
+    let company: String?
+    let role: String?
+    let email: String?
+    let phone: String?
+    let city: String?
+    var isSelected: Bool
+    let isDuplicate: Bool
+
+    /// Short summary of available data for the preview row
+    var subtitle: String {
+        [company, role, city].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+// MARK: - Import Preview Sheet
+
+struct ImportPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var importableContacts: [ImportableContact]
+    let onImport: ([ImportableContact], Int) -> Void
+
+    @State private var defaultOrbit: Int = 3
+    @State private var searchText = ""
+
+    private var filteredContacts: [ImportableContact] {
+        if searchText.isEmpty { return importableContacts }
+        let query = searchText.lowercased()
+        return importableContacts.filter {
+            $0.name.lowercased().contains(query)
+            || ($0.company?.lowercased().contains(query) ?? false)
+            || ($0.city?.lowercased().contains(query) ?? false)
+        }
+    }
+
+    private var selectedCount: Int {
+        importableContacts.filter(\.isSelected).count
+    }
+
+    private var duplicateCount: Int {
+        importableContacts.filter(\.isDuplicate).count
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Summary bar
+                summaryBar
+                Divider()
+
+                // Contact list
+                List {
+                    if duplicateCount > 0 {
+                        Section {
+                            HStack(spacing: OrbitSpacing.sm) {
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(.orange)
+                                    .font(.caption)
+                                Text("\(duplicateCount) contact\(duplicateCount == 1 ? "" : "s") already exist in Orbit and have been deselected.")
+                                    .font(OrbitTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    ForEach(filteredContacts) { contact in
+                        importContactRow(contact)
+                    }
+                }
+                .listStyle(.plain)
+
+                Divider()
+
+                // Orbit zone picker + import button
+                importControls
+            }
+            .navigationTitle("Import Contacts")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .searchable(text: $searchText, prompt: "Search contacts")
+        }
+    }
+
+    // MARK: - Summary Bar
+
+    private var summaryBar: some View {
+        HStack(spacing: OrbitSpacing.md) {
+            Text("\(importableContacts.count) found")
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+
+            Text("·")
+                .foregroundStyle(.tertiary)
+
+            Text("\(selectedCount) selected")
+                .font(OrbitTypography.captionMedium)
+                .foregroundStyle(selectedCount > 0 ? .primary : .secondary)
+
+            Spacer()
+
+            Button("Select All") {
+                for i in importableContacts.indices {
+                    importableContacts[i].isSelected = true
+                }
+            }
+            .controlSize(.small)
+
+            Button("Select None") {
+                for i in importableContacts.indices {
+                    importableContacts[i].isSelected = false
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, OrbitSpacing.md)
+        .padding(.vertical, OrbitSpacing.sm)
+    }
+
+    // MARK: - Contact Row
+
+    private func importContactRow(_ contact: ImportableContact) -> some View {
+        // Find the actual index in the source array for binding
+        let sourceIndex = importableContacts.firstIndex(where: { $0.id == contact.id })
+
+        return HStack(spacing: OrbitSpacing.md) {
+            // Checkbox
+            Button {
+                if let idx = sourceIndex {
+                    importableContacts[idx].isSelected.toggle()
+                }
+            } label: {
+                Image(systemName: contact.isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(contact.isSelected ? .blue : .secondary)
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: OrbitSpacing.sm) {
+                    Text(contact.name)
+                        .font(OrbitTypography.bodyMedium)
+                        .opacity(contact.isDuplicate ? 0.5 : 1.0)
+
+                    if contact.isDuplicate {
+                        Text("Duplicate")
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.orange.opacity(0.1), in: Capsule())
+                    }
+                }
+
+                if !contact.subtitle.isEmpty {
+                    Text(contact.subtitle)
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            // Data indicators
+            HStack(spacing: OrbitSpacing.xs) {
+                if contact.email != nil {
+                    Image(systemName: "envelope")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                if contact.phone != nil {
+                    Image(systemName: "phone")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                if contact.birthday != nil {
+                    Image(systemName: "gift")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let idx = sourceIndex {
+                importableContacts[idx].isSelected.toggle()
+            }
+        }
+    }
+
+    // MARK: - Import Controls
+
+    private var importControls: some View {
+        VStack(spacing: OrbitSpacing.sm) {
+            HStack {
+                Text("Default Orbit Zone")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Picker("Orbit", selection: $defaultOrbit) {
+                    ForEach(OrbitZone.allZones, id: \.id) { zone in
+                        Text(zone.name).tag(zone.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+            }
+
+            Button {
+                let selected = importableContacts.filter(\.isSelected)
+                onImport(selected, defaultOrbit)
+                dismiss()
+            } label: {
+                Text("Import \(selectedCount) Contact\(selectedCount == 1 ? "" : "s")")
+                    .font(OrbitTypography.bodyMedium)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selectedCount == 0)
+        }
+        .padding(OrbitSpacing.md)
     }
 }

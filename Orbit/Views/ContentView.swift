@@ -7,6 +7,9 @@ import SwiftData
 // - Handles Spotlight deep-linking (navigates to contact from system search)
 // - Notification-based menu command handling for macOS
 // - Result toast with animation
+//
+// FIX 2: On macOS, Settings is accessed via the menu bar (⌘,),
+//        so it's hidden from the sidebar to avoid redundancy.
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -121,10 +124,14 @@ struct ContentView: View {
                 }
             }
 
+            // FIX 2: On macOS, Settings is accessed via the menu bar (⌘,)
+            // so we don't show it in the sidebar. On iOS, it stays.
+            #if os(iOS)
             Section {
                 Label(NavigationSection.settings.rawValue, systemImage: NavigationSection.settings.icon)
                     .tag(NavigationSection.settings)
             }
+            #endif
         }
         .navigationTitle("Orbit")
         .toolbar {
