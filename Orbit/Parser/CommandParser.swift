@@ -306,7 +306,7 @@ final class CommandParser {
         case ":":
             return .setArtifact(contactName: contactName, key: key, value: value)
         case "+":
-            return .appendArtifact(contactName: contactName, key: key, value: value)
+            return .appendArtifact(contactName: contactName, key: key, value: value, forceConvert: false)
         case "-":
             return .removeArtifact(contactName: contactName, key: key, value: value)
         default:

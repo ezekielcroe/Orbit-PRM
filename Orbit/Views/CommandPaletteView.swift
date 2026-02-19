@@ -26,6 +26,9 @@ struct CommandPaletteView: View {
     @State private var resultMessage: String?
     @State private var resultIsError = false
     @State private var debounceTask: Task<Void, Never>?
+    
+    @State private var pendingCommand: ParsedCommand?
+    @State private var showConversionAlert = false
 
     @FocusState private var isInputFocused: Bool
 
@@ -83,6 +86,19 @@ struct CommandPaletteView: View {
             }
             .onAppear {
                 isInputFocused = true
+            }
+            
+            .alert("Convert to List?", isPresented: $showConversionAlert) {
+                Button("Convert") {
+                    if let cmd = pendingCommand {
+                        executeCommand(commandToExecute: cmd)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingCommand = nil
+                }
+            } message: {
+                Text("This artifact holds a single value. Converting it allows multiple items.")
             }
         }
     }
@@ -244,7 +260,7 @@ struct CommandPaletteView: View {
             Group {
                 syntaxHelpRow("@Sarah !Coffee", "Log a coffee with Sarah")
                 syntaxHelpRow("@Tom > likes + Jazz", "Add Jazz to Tom's likes")
-                syntaxHelpRow("@Tom > wife: Elena", "Set Tom's wife to Elena")
+                syntaxHelpRow("@Tom > likes - Jazz", "Remove Jazz from Tom's likes")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
                 syntaxHelpRow("@Sarah !Meeting #Work \"Discussed merger\"", "Detailed log with tag and note")
                 syntaxHelpRow("@Sarah", "Open Sarah's contact page")
@@ -399,10 +415,9 @@ struct CommandPaletteView: View {
 
     // MARK: - Command Execution
 
-    private func executeCommand() {
-        let command = parser.parse(inputText)
+    private func executeCommand(commandToExecute: ParsedCommand? = nil) {
+        let command = commandToExecute ?? parser.parse(inputText)
 
-        // FIX 1: Handle navigation directly in the UI layer.
         // The executor is for data mutations; navigation is a UI concern.
         if case .searchContact(let name, _) = command {
             if let contact = executor.findContact(named: name, in: modelContext) {
@@ -416,9 +431,15 @@ struct CommandPaletteView: View {
         }
 
         let result = executor.execute(command, in: modelContext)
+            
+            if let promptCommand = result.requiresConversionPrompt {
+                pendingCommand = promptCommand
+                showConversionAlert = true
+                return
+            }
 
-        resultMessage = result.message
-        resultIsError = !result.success
+            resultMessage = result.message
+            resultIsError = !result.success
 
         if result.success {
             // If there's an affected contact, offer navigation

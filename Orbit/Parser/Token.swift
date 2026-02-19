@@ -43,7 +43,7 @@ enum ParsedCommand {
     case setArtifact(contactName: String, key: String, value: String)
 
     /// Append to an array artifact: @Name > key + value
-    case appendArtifact(contactName: String, key: String, value: String)
+    case appendArtifact(contactName: String, key: String, value: String, forceConvert: Bool)
 
     /// Remove from an array artifact: @Name > key - value
     case removeArtifact(contactName: String, key: String, value: String)

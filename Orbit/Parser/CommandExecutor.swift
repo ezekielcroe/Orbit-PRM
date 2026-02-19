@@ -10,6 +10,7 @@ struct CommandResult {
     let success: Bool
     let message: String
     let affectedContact: Contact?
+    var requiresConversionPrompt: ParsedCommand? = nil
 }
 
 @Observable
@@ -38,8 +39,8 @@ final class CommandExecutor {
         case .setArtifact(let name, let key, let value):
             result = executeSetArtifact(contactName: name, key: key, value: value, in: context)
 
-        case .appendArtifact(let name, let key, let value):
-            result = executeAppendArtifact(contactName: name, key: key, value: value, in: context)
+        case .appendArtifact(let name, let key, let value, let forceConvert):
+            result = executeAppendArtifact(contactName: name, key: key, value: value, forceConvert: forceConvert, in: context)
 
         case .removeArtifact(let name, let key, let value):
             result = executeRemoveArtifact(contactName: name, key: key, value: value, in: context)
@@ -148,29 +149,31 @@ final class CommandExecutor {
         contactName: String,
         key: String,
         value: String,
+        forceConvert: Bool,
         in context: ModelContext
     ) -> CommandResult {
         guard let contact = findContact(named: contactName, in: context) else {
             return CommandResult(success: false, message: "Contact '\(contactName)' not found.", affectedContact: nil)
         }
 
-        if let existing = contact.artifacts.first(where: { $0.searchableKey == key.lowercased() }) {
+        let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
+
+        if let existing = contact.artifacts.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+            if !existing.isArray && !forceConvert {
+                let retryCommand = ParsedCommand.appendArtifact(contactName: contactName, key: key, value: value, forceConvert: true)
+                return CommandResult(success: false, message: "Requires conversion confirmation.", affectedContact: nil, requiresConversionPrompt: retryCommand)
+            }
             existing.appendValue(value)
+            if let newCategory = parsedCategory { existing.category = newCategory }
         } else {
-            // Create new array artifact
-            let artifact = Artifact(key: key, value: "", isArray: true)
+            let artifact = Artifact(key: parsedKey, value: "", isArray: true, category: parsedCategory)
             artifact.contact = contact
             context.insert(artifact)
             artifact.appendValue(value)
         }
 
         contact.modifiedAt = Date()
-
-        return CommandResult(
-            success: true,
-            message: "Added \(value) to \(contact.name)'s \(key)",
-            affectedContact: contact
-        )
+        return CommandResult(success: true, message: "Added \(value) to \(contact.name)'s \(parsedKey)", affectedContact: contact)
     }
 
     private func executeRemoveArtifact(
@@ -257,6 +260,16 @@ final class CommandExecutor {
             message: "Undid last interaction log",
             affectedContact: interaction.contact
         )
+    }
+    
+    // MARK: Artifact Category
+    private func parseCategoryAndKey(from rawKey: String) -> (category: String?, key: String) {
+        let components = rawKey.split(separator: "/", maxSplits: 1)
+        if components.count == 2 {
+            return (String(components[0]).trimmingCharacters(in: .whitespaces),
+                    String(components[1]).trimmingCharacters(in: .whitespaces))
+        }
+        return (nil, rawKey)
     }
 
     // MARK: - Helpers

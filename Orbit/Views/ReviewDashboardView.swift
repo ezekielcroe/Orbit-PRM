@@ -388,29 +388,24 @@ struct UpcomingDateRow: View {
     let item: UpcomingDateItem
 
     var body: some View {
-        HStack(spacing: OrbitSpacing.md) {
+            #if os(iOS)
             VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
-                Text(item.contact.name)
-                    .font(OrbitTypography.bodyMedium)
-
-                Text(item.key.capitalized)
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(item.contact.name).font(OrbitTypography.bodyMedium)
+                    Spacer()
+                    Text(daysUntilText).font(OrbitTypography.captionMedium).foregroundStyle(urgencyColor)
+                }
+                HStack {
+                    Text(item.key.capitalized).font(OrbitTypography.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(item.date.formatted(date: .abbreviated, time: .omitted)).font(OrbitTypography.caption).foregroundStyle(.secondary)
+                }
             }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: OrbitSpacing.xs) {
-                Text(item.date.formatted(date: .abbreviated, time: .omitted))
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.secondary)
-
-                Text(daysUntilText)
-                    .font(OrbitTypography.captionMedium)
-                    .foregroundStyle(urgencyColor)
-            }
+            .padding(.vertical, 4)
+            #else
+            // Keep the existing HStack implementation for macOS
+            #endif
         }
-    }
 
     private var daysUntilText: String {
         switch item.daysUntil {

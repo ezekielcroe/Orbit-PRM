@@ -120,16 +120,18 @@ final class Artifact {
     var searchableKey: String = ""
     var value: String = ""
     var isArray: Bool = false
+    var category: String?
     var createdAt: Date = Date()
     var modifiedAt: Date = Date()
     var contact: Contact?
 
-    init(key: String, value: String, isArray: Bool = false) {
+    init(key: String, value: String, isArray: Bool = false, category: String? = nil) {
         self.id = UUID()
         self.key = key
         self.searchableKey = key.lowercased()
         self.value = value
         self.isArray = isArray
+        self.category = category
         self.createdAt = Date()
         self.modifiedAt = Date()
     }
