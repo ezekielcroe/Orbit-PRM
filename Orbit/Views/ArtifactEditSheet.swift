@@ -57,7 +57,9 @@ struct ArtifactEditSheet: View {
                 Section("Key") {
                     TextField("e.g., birthday, spouse, likes", text: $key)
                         .autocorrectionDisabled()
+                        #if os(iOS)
                         .textInputAutocapitalization(.never)
+                        #endif
                         .onChange(of: key) { _, newKey in
                             // Auto-suggest array mode for list-like keys
                             let listKeys = ["likes", "children", "hobbies", "interests", "allergies", "skills"]

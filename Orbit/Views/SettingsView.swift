@@ -27,6 +27,7 @@ struct SettingsView: View {
     @State private var isExporting = false
     @State private var isImporting = false
     @State private var contactsAccessStatus: String = "Not checked"
+    @State private var showOpenSettingsAlert = false
 
     #if os(iOS)
     @State private var showShareSheet = false
@@ -56,6 +57,22 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This action cannot be undone.")
+        }
+        .alert("Contacts Access Required", isPresented: $showOpenSettingsAlert) {
+            Button("Open Settings") {
+                #if os(iOS)
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+                #else
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
+                    NSWorkspace.shared.open(url)
+                }
+                #endif
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You previously declined Contacts access. To import contacts, open Settings and enable Contacts permission for Orbit.")
         }
     }
 
@@ -247,17 +264,34 @@ struct SettingsView: View {
 
     private func checkContactsAccess() {
         #if canImport(Contacts)
-        let store = CNContactStore()
-        store.requestAccess(for: .contacts) { granted, error in
-            DispatchQueue.main.async {
-                if granted {
-                    showImportConfirmation = true
-                    importFromSystemContacts()
-                } else {
-                    importResultMessage = "Orbit needs permission to access your Contacts. You can grant this in Settings → Privacy → Contacts."
-                    showImportResults = true
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+
+        switch status {
+        case .authorized, .limited:
+            // Already have access — import directly
+            importFromSystemContacts()
+
+        case .notDetermined:
+            // First time — show the system prompt
+            let store = CNContactStore()
+            store.requestAccess(for: .contacts) { granted, error in
+                DispatchQueue.main.async {
+                    if granted {
+                        importFromSystemContacts()
+                    } else {
+                        importResultMessage = "Orbit needs Contacts access to import. You can grant this in Settings."
+                        showImportResults = true
+                    }
                 }
             }
+
+        case .denied, .restricted:
+            // Previously denied — system won't re-prompt, so direct to Settings
+            showOpenSettingsAlert = true
+
+        @unknown default:
+            importResultMessage = "Unable to determine Contacts access status."
+            showImportResults = true
         }
         #else
         importResultMessage = "Contact import is not available on this platform."
@@ -269,7 +303,8 @@ struct SettingsView: View {
         #if canImport(Contacts)
         isImporting = true
 
-        Task {
+        // Collect contacts on a background thread, then insert on main
+        Task.detached {
             let store = CNContactStore()
             let keysToFetch: [CNKeyDescriptor] = [
                 CNContactGivenNameKey as CNKeyDescriptor,
@@ -283,85 +318,104 @@ struct SettingsView: View {
                 CNContactJobTitleKey as CNKeyDescriptor,
             ]
 
-            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
-            var imported = 0
-            var skipped = 0
+            struct ImportedContact {
+                let name: String
+                let birthday: String?
+                let company: String?
+                let role: String?
+                let email: String?
+                let phone: String?
+                let city: String?
+            }
 
-            // Fetch existing names for duplicate detection
-            let existingDescriptor = FetchDescriptor<Contact>()
-            let existingContacts = (try? modelContext.fetch(existingDescriptor)) ?? []
-            let existingNames = Set(existingContacts.map(\.searchableName))
+            var collected: [ImportedContact] = []
+            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
 
             do {
                 try store.enumerateContacts(with: request) { cnContact, _ in
                     let fullName = [cnContact.givenName, cnContact.familyName]
                         .filter { !$0.isEmpty }
                         .joined(separator: " ")
-
                     guard !fullName.isEmpty else { return }
 
-                    // Skip duplicates
-                    if existingNames.contains(fullName.lowercased()) {
-                        skipped += 1
-                        return
-                    }
+                    let birthday: String? = {
+                        guard let bday = cnContact.birthday,
+                              let month = bday.month,
+                              let day = bday.day else { return nil }
+                        return String(format: "%02d/%02d", month, day)
+                    }()
 
-                    let contact = Contact(name: fullName, targetOrbit: 3) // Default to outer orbit
-
-                    // Import available artifacts
-                    if let birthday = cnContact.birthday,
-                       let month = birthday.month,
-                       let day = birthday.day {
-                        let birthdayArtifact = Artifact(
-                            key: "birthday",
-                            value: String(format: "%02d/%02d", month, day)
-                        )
-                        birthdayArtifact.contact = contact
-                        modelContext.insert(birthdayArtifact)
-                    }
-
-                    if !cnContact.organizationName.isEmpty {
-                        let companyArtifact = Artifact(key: "company", value: cnContact.organizationName)
-                        companyArtifact.contact = contact
-                        modelContext.insert(companyArtifact)
-                    }
-
-                    if !cnContact.jobTitle.isEmpty {
-                        let roleArtifact = Artifact(key: "role", value: cnContact.jobTitle)
-                        roleArtifact.contact = contact
-                        modelContext.insert(roleArtifact)
-                    }
-
-                    if let email = cnContact.emailAddresses.first?.value as String? {
-                        let emailArtifact = Artifact(key: "email", value: email)
-                        emailArtifact.contact = contact
-                        modelContext.insert(emailArtifact)
-                    }
-
-                    if let phone = cnContact.phoneNumbers.first?.value.stringValue {
-                        let phoneArtifact = Artifact(key: "phone", value: phone)
-                        phoneArtifact.contact = contact
-                        modelContext.insert(phoneArtifact)
-                    }
-
-                    if let address = cnContact.postalAddresses.first?.value {
-                        let city = address.city
-                        if !city.isEmpty {
-                            let cityArtifact = Artifact(key: "city", value: city)
-                            cityArtifact.contact = contact
-                            modelContext.insert(cityArtifact)
-                        }
-                    }
-
-                    modelContext.insert(contact)
-                    imported += 1
+                    collected.append(ImportedContact(
+                        name: fullName,
+                        birthday: birthday,
+                        company: cnContact.organizationName.isEmpty ? nil : cnContact.organizationName,
+                        role: cnContact.jobTitle.isEmpty ? nil : cnContact.jobTitle,
+                        email: cnContact.emailAddresses.first?.value as String?,
+                        phone: cnContact.phoneNumbers.first?.value.stringValue,
+                        city: {
+                            guard let addr = cnContact.postalAddresses.first?.value else { return nil }
+                            return addr.city.isEmpty ? nil : addr.city
+                        }()
+                    ))
                 }
 
-                await MainActor.run {
+                // Insert into SwiftData on the main actor
+                await MainActor.run { [collected] in
+                    let existingDescriptor = FetchDescriptor<Contact>()
+                    let existingContacts = (try? modelContext.fetch(existingDescriptor)) ?? []
+                    let existingNames = Set(existingContacts.map(\.searchableName))
+
+                    var imported = 0
+                    var skipped = 0
+
+                    for item in collected {
+                        if existingNames.contains(item.name.lowercased()) {
+                            skipped += 1
+                            continue
+                        }
+
+                        let contact = Contact(name: item.name, targetOrbit: 3)
+                        modelContext.insert(contact)
+
+                        if let birthday = item.birthday {
+                            let a = Artifact(key: "birthday", value: birthday)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+                        if let company = item.company {
+                            let a = Artifact(key: "company", value: company)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+                        if let role = item.role {
+                            let a = Artifact(key: "role", value: role)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+                        if let email = item.email {
+                            let a = Artifact(key: "email", value: email)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+                        if let phone = item.phone {
+                            let a = Artifact(key: "phone", value: phone)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+                        if let city = item.city {
+                            let a = Artifact(key: "city", value: city)
+                            a.contact = contact
+                            modelContext.insert(a)
+                        }
+
+                        imported += 1
+                    }
+
                     importResultMessage = "Imported \(imported) contact\(imported == 1 ? "" : "s"). \(skipped > 0 ? "Skipped \(skipped) duplicate\(skipped == 1 ? "" : "s")." : "")"
                     showImportResults = true
                     isImporting = false
                 }
+
             } catch {
                 await MainActor.run {
                     importResultMessage = "Import failed: \(error.localizedDescription)"

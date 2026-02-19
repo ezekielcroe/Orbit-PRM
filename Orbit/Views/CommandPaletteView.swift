@@ -109,7 +109,9 @@ struct CommandPaletteView: View {
                     .onChange(of: inputText) { _, newValue in
                         debounceTokenize(newValue)
                     }
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
 
                 if !inputText.isEmpty {
