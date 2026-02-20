@@ -13,6 +13,7 @@ struct Token: Identifiable, Equatable {
 
     enum Kind: Equatable {
         case entity         // @Name
+        case constellation  // *GroupName (Phase 2.5)
         case impulse        // !Action
         case tag            // #Topic
         case artifactKey    // > key (before the operator)
@@ -33,6 +34,16 @@ enum ParsedCommand {
     /// Log an interaction: @Name !Action #Tag "note" ^time
     case logInteraction(
         contactName: String,
+        impulse: String,
+        tags: [String],
+        note: String?,
+        timeModifier: String?
+    )
+
+    /// Log an interaction for every member of a constellation:
+    /// *Family !Call "Sunday check-in" #Weekly
+    case logConstellationInteraction(
+        constellationName: String,
         impulse: String,
         tags: [String],
         note: String?,
@@ -60,6 +71,9 @@ enum ParsedCommand {
     /// Search within a contact's artifacts: @Name searchquery
     case searchContact(name: String, query: String)
 
+    /// Navigate to a constellation: *Family
+    case searchConstellation(name: String)
+
     /// Undo the last action
     case undo
 
@@ -79,6 +93,7 @@ struct CommandSuggestion: Identifiable {
 
     enum SuggestionKind {
         case contact
+        case constellation  // Phase 2.5
         case impulse
         case tag
         case artifactKey

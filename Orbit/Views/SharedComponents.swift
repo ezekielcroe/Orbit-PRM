@@ -59,8 +59,6 @@ struct FlowLayout: Layout {
 }
 
 // MARK: - ArtifactRowView
-// Displays a single artifact key-value pair.
-// Used by ContactDetailView.
 
 struct ArtifactRowView: View {
     let artifact: Artifact
@@ -91,8 +89,8 @@ struct ArtifactRowView: View {
 }
 
 // MARK: - InteractionRowView
-// Displays a single interaction log entry.
-// Used by ContactDetailView.
+// Phase 2.5: Uses interaction.interactionTagNames (renamed from tagNames
+// to avoid confusion with the removed Contact.tags relationship).
 
 struct InteractionRowView: View {
     let interaction: Interaction

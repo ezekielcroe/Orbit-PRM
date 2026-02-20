@@ -23,13 +23,13 @@ final class SpotlightIndexer {
     func index(contact: Contact) {
         let attributeSet = CSSearchableItemAttributeSet(contentType: .contact)
 
-        // Display info
         attributeSet.displayName = contact.name
         attributeSet.contentDescription = buildDescription(for: contact)
 
-        // Keywords from tags and artifact values
-        var keywords = contact.tags.map(\.name)
+        // Keywords from aggregated interaction tags and artifact values
+        var keywords = contact.tagNames
         keywords.append(contact.orbitZoneName)
+        keywords.append(contentsOf: contact.constellations.map(\.name))
         for artifact in contact.artifacts {
             keywords.append(artifact.key)
             if !artifact.isArray {
@@ -38,7 +38,6 @@ final class SpotlightIndexer {
         }
         attributeSet.keywords = keywords
 
-        // Searchable metadata
         attributeSet.supportsNavigation = true
 
         let item = CSSearchableItem(
@@ -47,7 +46,6 @@ final class SpotlightIndexer {
             attributeSet: attributeSet
         )
 
-        // Items expire after 6 months of no update — long enough for distant orbits
         item.expirationDate = Calendar.current.date(byAdding: .month, value: 6, to: Date())
 
         searchableIndex.indexSearchableItems([item]) { error in
@@ -72,7 +70,6 @@ final class SpotlightIndexer {
     // MARK: - Batch Index All Contacts
 
     func reindexAll(from context: ModelContext) {
-        // First, clear all existing items
         searchableIndex.deleteSearchableItems(
             withDomainIdentifiers: [SpotlightIndexer.domainIdentifier]
         ) { [weak self] error in
@@ -81,7 +78,6 @@ final class SpotlightIndexer {
                 return
             }
 
-            // Re-index all non-archived contacts
             let predicate = #Predicate<Contact> { !$0.isArchived }
             let descriptor = FetchDescriptor<Contact>(predicate: predicate)
 
@@ -92,8 +88,9 @@ final class SpotlightIndexer {
                 attributeSet.displayName = contact.name
                 attributeSet.contentDescription = self?.buildDescription(for: contact)
 
-                var keywords = contact.tags.map(\.name)
+                var keywords = contact.tagNames
                 keywords.append(contact.orbitZoneName)
+                keywords.append(contentsOf: contact.constellations.map(\.name))
                 attributeSet.keywords = keywords
 
                 let item = CSSearchableItem(
@@ -116,8 +113,6 @@ final class SpotlightIndexer {
     }
 
     // MARK: - Handle Spotlight Tap
-    // When a user taps a Spotlight result, the app receives the contact's UUID.
-    // The app delegate or scene delegate should call this to resolve the contact.
 
     static func contactID(from userActivity: NSUserActivity) -> UUID? {
         guard userActivity.activityType == CSSearchableItemActionType,
@@ -138,12 +133,19 @@ final class SpotlightIndexer {
             parts.append("Last contact: \(days)d ago")
         }
 
-        let tagNames = contact.tags.prefix(3).map { "#\($0.name)" }.joined(separator: " ")
-        if !tagNames.isEmpty {
-            parts.append(tagNames)
+        // Tags from interactions
+        let tagDisplay = contact.aggregatedTags.prefix(3).map { "#\($0.name)" }.joined(separator: " ")
+        if !tagDisplay.isEmpty {
+            parts.append(tagDisplay)
         }
 
-        // Add key artifacts for context
+        // Constellations
+        let constellationDisplay = contact.constellations.prefix(2).map { $0.name }.joined(separator: ", ")
+        if !constellationDisplay.isEmpty {
+            parts.append("★ \(constellationDisplay)")
+        }
+
+        // Key artifacts
         let keyArtifacts = contact.artifacts
             .filter { ["company", "city", "role", "spouse"].contains($0.searchableKey) }
             .prefix(2)

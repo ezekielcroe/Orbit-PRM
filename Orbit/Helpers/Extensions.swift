@@ -93,7 +93,7 @@ struct OrbitExporter {
             entry["artifacts"] = artifacts
 
             // Tags
-            entry["tags"] = contact.tags.map(\.name)
+            entry["tags"] = contact.tagNames
 
             // Constellations
             entry["constellations"] = contact.constellations.map(\.name)
@@ -146,7 +146,7 @@ struct OrbitExporter {
             let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
             let daysSince = contact.daysSinceLastContact.map(String.init) ?? "N/A"
             let interactionCount = String(contact.interactions.filter({ !$0.isDeleted }).count)
-            let tags = csvEscape(contact.tags.map(\.name).joined(separator: "; "))
+            let tags = csvEscape(contact.tagNames.joined(separator: "; "))
             let constellations = csvEscape(contact.constellations.map(\.name).joined(separator: "; "))
             let archived = contact.isArchived ? "Yes" : "No"
             let notes = csvEscape(contact.notes)

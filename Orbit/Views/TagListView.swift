@@ -12,9 +12,25 @@ struct TagListView: View {
     @Query(sort: \Tag.name)
     private var tags: [Tag]
 
+    @Query(filter: #Predicate<Contact> { !$0.isArchived })
+    private var contacts: [Contact]
+
     @State private var showAddTag = false
     @State private var newTagName = ""
     @State private var selectedTag: Tag?
+
+    /// Build a mapping of tag name → contacts that have interactions with that tag.
+    private var tagContactMap: [String: [(contact: Contact, count: Int)]] {
+        var map: [String: [(contact: Contact, count: Int)]] = [:]
+
+        for contact in contacts {
+            for tag in contact.aggregatedTags {
+                map[tag.name, default: []].append((contact: contact, count: tag.count))
+            }
+        }
+
+        return map
+    }
 
     var body: some View {
         Group {
@@ -22,11 +38,14 @@ struct TagListView: View {
                 ContentUnavailableView(
                     "No Tags",
                     systemImage: "tag",
-                    description: Text("Tags are created when you use #tag in the command palette, or you can create them here.")
+                    description: Text("Tags are created when you use #tag in the command palette.")
                 )
             } else {
                 List(selection: $selectedTag) {
                     ForEach(tags) { tag in
+                        let contactsForTag = tagContactMap[tag.searchableName] ?? []
+                        let totalUses = contactsForTag.reduce(0) { $0 + $1.count }
+
                         HStack {
                             Text("#\(tag.name)")
                                 .font(OrbitTypography.bodyMedium)
@@ -34,9 +53,15 @@ struct TagListView: View {
 
                             Spacer()
 
-                            Text("\(tag.contacts.count)")
-                                .font(OrbitTypography.caption)
-                                .foregroundStyle(.secondary)
+                            if !contactsForTag.isEmpty {
+                                Text("\(contactsForTag.count) contact\(contactsForTag.count == 1 ? "" : "s") · \(totalUses) use\(totalUses == 1 ? "" : "s")")
+                                    .font(OrbitTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Unused")
+                                    .font(OrbitTypography.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                         .tag(tag)
                         .swipeActions(edge: .trailing) {
@@ -73,7 +98,7 @@ struct TagListView: View {
             }
         }
         .sheet(item: $selectedTag) { tag in
-            TagDetailSheet(tag: tag)
+            TagDetailSheet(tag: tag, contacts: contacts)
         }
     }
 }
@@ -81,24 +106,41 @@ struct TagListView: View {
 // MARK: - Tag Detail Sheet
 
 struct TagDetailSheet: View {
-    @Bindable var tag: Tag
+    let tag: Tag
+    let contacts: [Contact]
+
+    /// Contacts that have interactions tagged with this tag, sorted by frequency
+    private var taggedContacts: [(contact: Contact, count: Int)] {
+        contacts.compactMap { contact in
+            let match = contact.aggregatedTags.first(where: { $0.name == tag.searchableName })
+            guard let match else { return nil }
+            return (contact: contact, count: match.count)
+        }
+        .sorted { $0.count > $1.count }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Contacts tagged #\(tag.name)") {
-                    if tag.contacts.isEmpty {
-                        Text("No contacts with this tag yet.")
+                Section("Contacts with #\(tag.name) interactions") {
+                    if taggedContacts.isEmpty {
+                        Text("No contacts have interactions tagged #\(tag.name).")
                             .font(OrbitTypography.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(tag.contacts.sorted(by: { $0.name < $1.name })) { contact in
+                        ForEach(taggedContacts, id: \.contact.id) { item in
                             HStack {
-                                Text(contact.name)
-                                    .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
+                                Text(item.contact.name)
+                                    .font(OrbitTypography.contactName(orbit: item.contact.targetOrbit))
+                                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: item.contact.daysSinceLastContact))
+
                                 Spacer()
-                                Text(contact.orbitZoneName)
+
+                                Text("×\(item.count)")
+                                    .font(OrbitTypography.caption)
+                                    .foregroundStyle(OrbitColors.syntaxTag)
+
+                                Text(item.contact.orbitZoneName)
                                     .font(OrbitTypography.footnote)
                                     .foregroundStyle(.tertiary)
                             }

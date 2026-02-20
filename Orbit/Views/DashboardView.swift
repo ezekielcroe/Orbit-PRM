@@ -202,8 +202,8 @@ struct DashboardContactRow: View {
             Spacer()
 
             // Tags
-            if !contact.tags.isEmpty {
-                Text(contact.tags.prefix(2).map(\.name).joined(separator: ", "))
+            if !contact.aggregatedTags.isEmpty {
+                Text(contact.aggregatedTags.prefix(2).map(\.name).joined(separator: ", "))
                     .font(OrbitTypography.footnote)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)

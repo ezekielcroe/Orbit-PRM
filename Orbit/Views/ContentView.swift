@@ -8,8 +8,9 @@ import SwiftData
 // - Notification-based menu command handling for macOS
 // - Result toast with animation
 //
-// FIX 2: On macOS, Settings is accessed via the menu bar (⌘,),
-//        so it's hidden from the sidebar to avoid redundancy.
+
+import SwiftUI
+import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -46,7 +47,6 @@ struct ContentView: View {
             }
         }
 
-        /// Group sections for sidebar display
         static var primarySections: [NavigationSection] {
             [.dashboard, .contacts, .review, .table]
         }
@@ -70,8 +70,11 @@ struct ContentView: View {
                 onNavigateToContact: { contact in
                     selectedContact = contact
                     selectedSection = .contacts
-                    // Re-index the contact in Spotlight after modification
                     spotlightIndexer.index(contact: contact)
+                },
+                onNavigateToConstellation: { _ in
+                    // Navigate to the Constellations section
+                    selectedSection = .constellations
                 }
             )
             .presentationDetents([.medium, .large])
@@ -80,14 +83,12 @@ struct ContentView: View {
         .overlay(alignment: .bottom) {
             resultToast
         }
-        // Handle Spotlight deep-link
         .onChange(of: spotlightContactID) { _, newID in
             if let id = newID {
                 navigateToContact(id: id)
                 spotlightContactID = nil
             }
         }
-        // macOS menu command handlers
         .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in
             showCommandPalette = true
         }
@@ -100,7 +101,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showContactsRequested)) { _ in
             selectedSection = .contacts
         }
-        // Initial Spotlight indexing
         .task {
             spotlightIndexer.reindexAll(from: modelContext)
         }
@@ -124,8 +124,6 @@ struct ContentView: View {
                 }
             }
 
-            // FIX 2: On macOS, Settings is accessed via the menu bar (⌘,)
-            // so we don't show it in the sidebar. On iOS, it stays.
             #if os(iOS)
             Section {
                 Label(NavigationSection.settings.rawValue, systemImage: NavigationSection.settings.icon)

@@ -38,7 +38,7 @@ struct ContactListView: View {
             let query = searchText.lowercased()
             result = result.filter { contact in
                 contact.searchableName.contains(query)
-                    || contact.tags.contains(where: { $0.searchableName.contains(query) })
+                    || contact.tagNames.contains(where: { $0.contains(query) })
                     || contact.artifacts.contains(where: {
                         $0.value.lowercased().contains(query)
                         || $0.searchableKey.contains(query)
@@ -79,8 +79,8 @@ struct ContactListView: View {
                         }
                     }
                     Spacer()
-                    if !contact.tags.isEmpty {
-                        Text(contact.tags.prefix(2).map(\.name).joined(separator: ", "))
+                    if !contact.aggregatedTags.isEmpty {
+                        Text(contact.aggregatedTags.prefix(2).map(\.name).joined(separator: ", "))
                             .font(OrbitTypography.footnote)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
@@ -129,3 +129,4 @@ struct ContactListView: View {
         }
     }
 }
+

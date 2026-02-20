@@ -7,8 +7,9 @@ import Foundation
 // - Trivial to debug and extend
 // - Directly outputs the token types Orbit needs
 //
-// The parser maps four operator characters to token types:
+// The parser maps operator characters to token types:
 //   @ → entity (contact name)
+//   * → constellation (group name)
 //   ! → impulse (action/verb)
 //   # → tag
 //   > → artifact assignment
@@ -32,6 +33,11 @@ final class CommandParser {
             switch char {
             case "@":
                 let token = readPrefixedToken(input: input, from: current, kind: .entity)
+                tokens.append(token)
+                current = token.range.upperBound
+
+            case "*":
+                let token = readPrefixedToken(input: input, from: current, kind: .constellation)
                 tokens.append(token)
                 current = token.range.upperBound
 
@@ -94,9 +100,14 @@ final class CommandParser {
 
         let tokens = tokenize(trimmed)
 
-        // Must start with an entity
+        // Check for constellation command first (*Group)
+        if let constellationToken = tokens.first(where: { $0.kind == .constellation }) {
+            return parseConstellationCommand(constellationName: constellationToken.value, tokens: tokens)
+        }
+
+        // Must have an entity for contact-level commands
         guard let entityToken = tokens.first(where: { $0.kind == .entity }) else {
-            return .invalid(reason: "Command must begin with @ContactName")
+            return .invalid(reason: "Command must begin with @ContactName or *Constellation")
         }
 
         let contactName = entityToken.value
@@ -145,9 +156,31 @@ final class CommandParser {
         return .searchContact(name: contactName, query: "")
     }
 
+    // MARK: - Constellation Command Resolution
+
+    private func parseConstellationCommand(constellationName: String, tokens: [Token]) -> ParsedCommand {
+        // If there's an impulse, it's a constellation interaction
+        if let impulseToken = tokens.first(where: { $0.kind == .impulse }) {
+            let tags = tokens.filter { $0.kind == .tag }.map(\.value)
+            let note = tokens.first(where: { $0.kind == .quotedText })?.value
+            let timeMod = tokens.first(where: { $0.kind == .timeModifier })?.value
+
+            return .logConstellationInteraction(
+                constellationName: constellationName,
+                impulse: impulseToken.value,
+                tags: tags,
+                note: note,
+                timeModifier: timeMod
+            )
+        }
+
+        // Bare *ConstellationName — navigate to it
+        return .searchConstellation(name: constellationName)
+    }
+
     // MARK: - Private Tokenizer Helpers
 
-    /// Read a prefixed token (@Name, !Action, #Tag, ^yesterday)
+    /// Read a prefixed token (@Name, *Group, !Action, #Tag, ^yesterday)
     /// Accumulates characters after the prefix until whitespace or another operator.
     private func readPrefixedToken(input: String, from start: String.Index, kind: Token.Kind) -> Token {
         // Skip the operator character itself
@@ -271,7 +304,7 @@ final class CommandParser {
 
     /// Check if a character is one of Orbit's command operators
     private func isOperator(_ char: Character) -> Bool {
-        return char == "@" || char == "!" || char == "#" || char == ">" || char == "^"
+        return char == "@" || char == "*" || char == "!" || char == "#" || char == ">" || char == "^"
     }
 
     /// Advance past whitespace characters

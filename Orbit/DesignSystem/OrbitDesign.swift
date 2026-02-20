@@ -30,12 +30,13 @@ enum OrbitColors {
     static let textMuted = Color.secondary.opacity(0.5)
 
     // Syntax highlighting colors for the command palette
-    static let syntaxEntity = Color.blue          // @contacts
-    static let syntaxImpulse = Color.orange       // !actions
-    static let syntaxTag = Color.green            // #tags
-    static let syntaxArtifact = Color.purple      // >artifacts
-    static let syntaxQuote = Color.brown          // "quoted text"
-    static let syntaxTime = Color.cyan            // ^time modifiers
+    static let syntaxEntity = Color.blue              // @contacts
+    static let syntaxConstellation = Color.indigo     // *constellations (Phase 2.5)
+    static let syntaxImpulse = Color.orange           // !actions
+    static let syntaxTag = Color.green                // #tags
+    static let syntaxArtifact = Color.purple          // >artifacts
+    static let syntaxQuote = Color.brown              // "quoted text"
+    static let syntaxTime = Color.cyan                // ^time modifiers
     static let syntaxInvalid = Color.secondary.opacity(0.4) // Unparsed text
 
     // Status colors — used sparingly
@@ -52,8 +53,6 @@ enum OrbitColors {
 }
 
 // MARK: - Color Convenience
-// SwiftUI doesn't have a built-in light/dark initializer like this,
-// so we use conditional compilation for each platform.
 #if os(iOS)
 extension Color {
     init(light: Color, dark: Color) {
@@ -67,29 +66,20 @@ extension Color {
 #endif
 
 // MARK: - Typography
-// Contact names use variable weight to encode relationship strength.
-// Phase 1: Maps targetOrbit to weight (simpler). Phase 3 will use cachedMomentum.
-// Uses the system font (SF Pro) which has excellent variable weight support.
 enum OrbitTypography {
 
     // MARK: Contact Name Display
 
-    /// Contact name styled by orbit proximity.
-    /// Inner circle = heavy, deep space = thin.
     static func contactName(orbit: Int) -> Font {
         let weight = weightForOrbit(orbit)
         return .system(size: 17, weight: weight, design: .default)
     }
 
-    /// Large contact name for detail views
     static func contactNameLarge(orbit: Int) -> Font {
         let weight = weightForOrbit(orbit)
         return .system(size: 28, weight: weight, design: .default)
     }
 
-    /// Map orbit zone (0–4) to font weight
-    /// 0 (Inner Circle) → .bold
-    /// 4 (Deep Space) → .ultraLight
     private static func weightForOrbit(_ orbit: Int) -> Font.Weight {
         switch orbit {
         case 0: return .bold
@@ -103,10 +93,8 @@ enum OrbitTypography {
 
     // MARK: Opacity for Cadence
 
-    /// Opacity based on days since last contact.
-    /// Recently contacted → fully opaque. Neglected → translucent.
     static func opacityForRecency(daysSinceContact: Int?) -> Double {
-        guard let days = daysSinceContact else { return 0.4 } // Never contacted
+        guard let days = daysSinceContact else { return 0.4 }
         switch days {
         case 0...7: return 1.0
         case 8...30: return 0.85
@@ -153,7 +141,6 @@ enum OrbitZone {
 
 // MARK: - View Modifiers
 
-/// Applies the Swiss-style card treatment: no borders, no shadows, just spacing
 struct OrbitCardModifier: ViewModifier {
     func body(content: Content) -> some View {
         content

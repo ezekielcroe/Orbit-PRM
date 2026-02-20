@@ -39,8 +39,8 @@ final class Contact {
     @Relationship(deleteRule: .cascade, inverse: \Artifact.contact)
     var artifacts: [Artifact] = []
 
-    @Relationship(inverse: \Tag.contacts)
-    var tags: [Tag] = []
+    // Phase 2.5: Tags removed from Contact. Tags live on Interactions only.
+    // Use aggregatedTags to derive tags from interactions.
 
     @Relationship(inverse: \Constellation.contacts)
     var constellations: [Constellation] = []
@@ -73,6 +73,29 @@ final class Contact {
     var daysSinceLastContact: Int? {
         guard let last = lastContactDate else { return nil }
         return Calendar.current.dateComponents([.day], from: last, to: Date()).day
+    }
+
+    /// Aggregate tags from all non-deleted interactions.
+    /// Returns (tagName, count) pairs sorted by frequency descending.
+    var aggregatedTags: [(name: String, count: Int)] {
+        let activeInteractions = interactions.filter { !$0.isDeleted }
+        var tagCounts: [String: Int] = [:]
+
+        for interaction in activeInteractions {
+            for tag in interaction.tagList {
+                let normalized = tag.lowercased()
+                tagCounts[normalized, default: 0] += 1
+            }
+        }
+
+        return tagCounts
+            .map { (name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+    }
+
+    /// Flat list of unique tag names for this contact (derived from interactions).
+    var tagNames: [String] {
+        aggregatedTags.map(\.name)
     }
 
     func updateSearchableName() {
@@ -108,7 +131,7 @@ final class Interaction {
     }
 
     var tagList: [String] {
-        tagNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        tagNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }
 
@@ -182,15 +205,15 @@ final class Artifact {
 }
 
 // MARK: - Tag
+// Phase 2.5: Tag is now a standalone registry for autocomplete/browsing.
+// No relationship to Contact. Tags are created when used in commands
+// and stored as strings on Interaction.tagNames.
 @Model
 final class Tag {
     var id: UUID = UUID()
     var name: String = ""
     var searchableName: String = ""
     var createdAt: Date = Date()
-
-    @Relationship
-    var contacts: [Contact] = []
 
     init(name: String) {
         self.id = UUID()
@@ -222,10 +245,6 @@ final class Constellation {
 }
 
 // MARK: - Versioned Schema
-// References the top-level models. When you need to migrate,
-// create OrbitSchemaV2, copy the models with changes, and add
-// migration stages to the plan.
-
 enum OrbitSchemaV1: VersionedSchema {
     static var versionIdentifier = Schema.Version(1, 0, 0)
 

@@ -2,17 +2,6 @@ import SwiftUI
 import SwiftData
 
 // MARK: - ContactDetailView (Phase 2)
-// Updates from Phase 1:
-// - Lazy-loaded interaction timeline (performance for contacts with many logs)
-// - Spotlight re-indexing on interaction log
-// - Inline artifact value editing on long-press (bypasses command palette)
-// - Interaction grouping by month for easier scanning
-// - Quick-action buttons for common operations
-//
-// FIX 4: Tabbed layout (Info / Timeline) prevents clutter at scale.
-// - Artifacts grouped into semantic categories (Contact Info, Personal, Professional, Other)
-// - Interactions have impulse-type filter chips and in-section search
-// - Older month groups are collapsed by default
 
 struct ContactDetailView: View {
     @Environment(\.modelContext) private var modelContext
@@ -23,12 +12,10 @@ struct ContactDetailView: View {
     @State private var showAddArtifact = false
     @State private var showAddInteraction = false
     @State private var editingArtifact: Artifact?
-    @State private var interactionLimit = 20 // Lazy loading
+    @State private var interactionLimit = 20
 
-    // FIX 4: Tab selection
     @State private var selectedTab: DetailTab = .info
 
-    // FIX 4: Interaction filters
     @State private var impulseFilter: String?
     @State private var interactionSearch = ""
     @State private var expandedMonths: Set<String> = []
@@ -53,7 +40,6 @@ struct ContactDetailView: View {
             .sorted { $0.date > $1.date }
     }
 
-    /// Filtered interactions based on impulse filter and search text
     private var filteredInteractions: [Interaction] {
         var result = activeInteractions
 
@@ -73,7 +59,6 @@ struct ContactDetailView: View {
         return result
     }
 
-    /// Unique impulse types for filter chips
     private var uniqueImpulses: [String] {
         let impulses = activeInteractions.map(\.impulse)
         var seen = Set<String>()
@@ -81,7 +66,6 @@ struct ContactDetailView: View {
             .sorted()
     }
 
-    /// Group interactions by month for visual clarity
     private var groupedInteractions: [(key: String, interactions: [Interaction])] {
         let limited = Array(filteredInteractions.prefix(interactionLimit))
 
@@ -140,7 +124,6 @@ struct ContactDetailView: View {
         let sorted = contact.artifacts.sorted { $0.key < $1.key }
         let grouped = Dictionary(grouping: sorted) { ArtifactCategory.category(for: $0.key) }
 
-        // Return in category order, skipping empty groups
         return ArtifactCategory.allCases.compactMap { category in
             guard let arts = grouped[category], !arts.isEmpty else { return nil }
             return (category: category, artifacts: arts)
@@ -151,7 +134,6 @@ struct ContactDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Always-visible header
             ScrollView {
                 VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
                     headerSection
@@ -160,9 +142,8 @@ struct ContactDetailView: View {
                 .padding(.horizontal, OrbitSpacing.lg)
                 .padding(.top, OrbitSpacing.lg)
             }
-            .frame(maxHeight: 160)
+            .frame(maxHeight: 180)
 
-            // Tab picker
             Picker("Section", selection: $selectedTab) {
                 ForEach(DetailTab.allCases, id: \.self) { tab in
                     Label(tab.rawValue, systemImage: tab.icon)
@@ -175,7 +156,6 @@ struct ContactDetailView: View {
 
             Divider()
 
-            // Tab content
             switch selectedTab {
             case .info:
                 infoTabContent
@@ -229,7 +209,6 @@ struct ContactDetailView: View {
             ArtifactEditSheet(contact: contact, mode: .edit(artifact))
         }
         .onAppear {
-            // Auto-expand the most recent 2 month groups
             let recentKeys = groupedInteractions.prefix(2).map(\.key)
             expandedMonths = Set(recentKeys)
         }
@@ -265,12 +244,35 @@ struct ContactDetailView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            if !contact.tags.isEmpty {
+            // Phase 2.5: Aggregated tags from interactions with counts
+            if !contact.aggregatedTags.isEmpty {
                 FlowLayout(spacing: OrbitSpacing.sm) {
-                    ForEach(contact.tags) { tag in
-                        Text("#\(tag.name)")
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(OrbitColors.syntaxTag)
+                    ForEach(contact.aggregatedTags, id: \.name) { tag in
+                        HStack(spacing: 2) {
+                            Text("#\(tag.name)")
+                                .font(OrbitTypography.caption)
+                                .foregroundStyle(OrbitColors.syntaxTag)
+                            if tag.count > 1 {
+                                Text("×\(tag.count)")
+                                    .font(OrbitTypography.footnote)
+                                    .foregroundStyle(OrbitColors.syntaxTag.opacity(0.6))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Constellation membership
+            if !contact.constellations.isEmpty {
+                FlowLayout(spacing: OrbitSpacing.sm) {
+                    ForEach(contact.constellations) { constellation in
+                        HStack(spacing: 2) {
+                            Image(systemName: "star.circle.fill")
+                                .font(.system(size: 9))
+                            Text(constellation.name)
+                                .font(OrbitTypography.caption)
+                        }
+                        .foregroundStyle(OrbitColors.syntaxConstellation)
                     }
                 }
             }
@@ -317,7 +319,6 @@ struct ContactDetailView: View {
         .controlSize(.small)
     }
 
-    /// Instantly log a common interaction type
     private func quickLog(impulse: String) {
         let interaction = Interaction(impulse: impulse, date: Date())
         interaction.contact = contact
@@ -372,7 +373,6 @@ struct ContactDetailView: View {
 
     private func artifactCategorySection(_ category: ArtifactCategory, artifacts: [Artifact]) -> some View {
         VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            // Category header
             HStack(spacing: OrbitSpacing.xs) {
                 Image(systemName: category.icon)
                     .font(.caption2)
@@ -408,11 +408,9 @@ struct ContactDetailView: View {
 
     private var timelineTabContent: some View {
         VStack(spacing: 0) {
-            // Filter controls
             interactionFilterBar
             Divider()
 
-            // Interaction list
             ScrollView {
                 VStack(alignment: .leading, spacing: OrbitSpacing.md) {
                     interactionSection
@@ -426,7 +424,6 @@ struct ContactDetailView: View {
 
     private var interactionFilterBar: some View {
         VStack(spacing: OrbitSpacing.sm) {
-            // Search
             HStack(spacing: OrbitSpacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -450,7 +447,6 @@ struct ContactDetailView: View {
             .padding(.vertical, OrbitSpacing.xs)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
-            // Impulse filter chips
             if uniqueImpulses.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: OrbitSpacing.xs) {
@@ -527,7 +523,6 @@ struct ContactDetailView: View {
                     collapsibleMonthGroup(group, isRecentGroup: index < 2)
                 }
 
-                // Load more button for lazy loading
                 if filteredInteractions.count > interactionLimit {
                     Button {
                         interactionLimit += 20
@@ -550,7 +545,6 @@ struct ContactDetailView: View {
         let isExpanded = expandedMonths.contains(group.key)
 
         return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            // Month header — tappable to collapse/expand
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if isExpanded {

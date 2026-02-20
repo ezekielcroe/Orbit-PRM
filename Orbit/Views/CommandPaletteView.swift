@@ -19,6 +19,7 @@ struct CommandPaletteView: View {
 
     @Binding var isPresented: Bool
     var onNavigateToContact: ((Contact) -> Void)?
+    var onNavigateToConstellation: ((Constellation) -> Void)?
 
     @State private var inputText = ""
     @State private var tokens: [Token] = []
@@ -26,7 +27,7 @@ struct CommandPaletteView: View {
     @State private var resultMessage: String?
     @State private var resultIsError = false
     @State private var debounceTask: Task<Void, Never>?
-    
+
     @State private var pendingCommand: ParsedCommand?
     @State private var showConversionAlert = false
 
@@ -34,12 +35,15 @@ struct CommandPaletteView: View {
 
     private let parser = CommandParser()
 
-    // Fetch contacts and tags for autocomplete
+    // Fetch contacts, tags, and constellations for autocomplete
     @Query(filter: #Predicate<Contact> { !$0.isArchived }, sort: \Contact.name)
     private var contacts: [Contact]
 
     @Query(sort: \Tag.name)
     private var tags: [Tag]
+
+    @Query(sort: \Constellation.name)
+    private var constellations: [Constellation]
 
     var body: some View {
         NavigationStack {
@@ -87,7 +91,7 @@ struct CommandPaletteView: View {
             .onAppear {
                 isInputFocused = true
             }
-            
+
             .alert("Convert to List?", isPresented: $showConversionAlert) {
                 Button("Convert") {
                     if let cmd = pendingCommand {
@@ -118,7 +122,7 @@ struct CommandPaletteView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
 
-                TextField("@contact !action #tag \"note\"", text: $inputText)
+                TextField("@contact or *group !action #tag \"note\"", text: $inputText)
                     .font(OrbitTypography.commandInput)
                     .focused($isInputFocused)
                     .onSubmit { executeCommand() }
@@ -149,7 +153,6 @@ struct CommandPaletteView: View {
             .padding(.top, OrbitSpacing.md)
 
             #if os(macOS)
-            // Operator buttons as a toolbar on macOS too
             HStack(spacing: OrbitSpacing.sm) {
                 operatorButtons
             }
@@ -158,12 +161,13 @@ struct CommandPaletteView: View {
         }
     }
 
-    // MARK: - Operator Quick-Insert Buttons (Accessory Rail)
+    // MARK: - Operator Quick-Insert Buttons
 
     @ViewBuilder
     private var operatorButtons: some View {
         Group {
             operatorButton("@", label: "Contact", color: OrbitColors.syntaxEntity)
+            operatorButton("*", label: "Group", color: OrbitColors.syntaxConstellation)
             operatorButton("!", label: "Action", color: OrbitColors.syntaxImpulse)
             operatorButton("#", label: "Tag", color: OrbitColors.syntaxTag)
             operatorButton(">", label: "Artifact", color: OrbitColors.syntaxArtifact)
@@ -174,7 +178,6 @@ struct CommandPaletteView: View {
 
     private func operatorButton(_ op: String, label: String, color: Color) -> some View {
         Button {
-            // Add a space before the operator if input doesn't end with one
             if !inputText.isEmpty && !inputText.hasSuffix(" ") {
                 inputText += " "
             }
@@ -194,7 +197,6 @@ struct CommandPaletteView: View {
     // MARK: - Token Highlighting
 
     private var highlightedTokensView: some View {
-        // Build an AttributedString-like view from tokens
         HStack(spacing: 2) {
             ForEach(tokens) { token in
                 Text(tokenDisplayText(token))
@@ -207,6 +209,7 @@ struct CommandPaletteView: View {
     private func tokenDisplayText(_ token: Token) -> String {
         switch token.kind {
         case .entity: return "@\(token.value)"
+        case .constellation: return "*\(token.value)"
         case .impulse: return "!\(token.value)"
         case .tag: return "#\(token.value)"
         case .artifactKey: return ">\(token.value)"
@@ -222,6 +225,7 @@ struct CommandPaletteView: View {
     private func colorForToken(_ token: Token) -> Color {
         switch token.kind {
         case .entity: return OrbitColors.syntaxEntity
+        case .constellation: return OrbitColors.syntaxConstellation
         case .impulse: return OrbitColors.syntaxImpulse
         case .tag: return OrbitColors.syntaxTag
         case .artifactKey, .artifactOp, .artifactValue: return OrbitColors.syntaxArtifact
@@ -259,11 +263,12 @@ struct CommandPaletteView: View {
 
             Group {
                 syntaxHelpRow("@Sarah !Coffee", "Log a coffee with Sarah")
+                syntaxHelpRow("*Family !Call \"Sunday check-in\"", "Log a call for everyone in Family")
                 syntaxHelpRow("@Tom > likes + Jazz", "Add Jazz to Tom's likes")
-                syntaxHelpRow("@Tom > likes - Jazz", "Remove Jazz from Tom's likes")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
                 syntaxHelpRow("@Sarah !Meeting #Work \"Discussed merger\"", "Detailed log with tag and note")
                 syntaxHelpRow("@Sarah", "Open Sarah's contact page")
+                syntaxHelpRow("*Family", "Open Family constellation")
                 syntaxHelpRow("!undo", "Undo the last logged interaction")
             }
         }
@@ -312,7 +317,6 @@ struct CommandPaletteView: View {
     private func updateSuggestions() {
         suggestions = []
 
-        // Find the last token being typed to determine context
         guard let lastToken = tokens.last else { return }
 
         switch lastToken.kind {
@@ -331,8 +335,22 @@ struct CommandPaletteView: View {
                     )
                 }
 
+        case .constellation:
+            // Suggest matching constellations
+            let prefix = lastToken.value.lowercased()
+            suggestions = constellations
+                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
+                .prefix(6)
+                .map { constellation in
+                    CommandSuggestion(
+                        icon: "star.circle",
+                        label: "\(constellation.name) (\(constellation.contacts.count))",
+                        insertion: "*\(constellation.name) ",
+                        kind: .constellation
+                    )
+                }
+
         case .impulse:
-            // Suggest common impulse types
             let prefix = lastToken.value.lowercased()
             let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
             suggestions = commonImpulses
@@ -347,7 +365,6 @@ struct CommandPaletteView: View {
                 }
 
         case .tag:
-            // Suggest existing tags
             let prefix = lastToken.value.lowercased()
             suggestions = tags
                 .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
@@ -362,7 +379,6 @@ struct CommandPaletteView: View {
                 }
 
         case .artifactKey:
-            // Suggest existing artifact keys for the selected contact
             if let entityToken = tokens.first(where: { $0.kind == .entity }),
                let contact = executor.findContact(named: entityToken.value, in: modelContext) {
                 let prefix = lastToken.value.lowercased()
@@ -385,12 +401,13 @@ struct CommandPaletteView: View {
     }
 
     private func applySuggestion(_ suggestion: CommandSuggestion) {
-        // Replace the text from the last operator to the cursor with the suggestion
-        // For simplicity in Phase 1, we replace based on the suggestion kind
         switch suggestion.kind {
         case .contact:
-            // Replace everything up to and including the @token
             if let range = inputText.range(of: "@", options: .backwards) {
+                inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
+            }
+        case .constellation:
+            if let range = inputText.range(of: "*", options: .backwards) {
                 inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
             }
         case .impulse:
@@ -418,7 +435,7 @@ struct CommandPaletteView: View {
     private func executeCommand(commandToExecute: ParsedCommand? = nil) {
         let command = commandToExecute ?? parser.parse(inputText)
 
-        // The executor is for data mutations; navigation is a UI concern.
+        // Handle contact navigation
         if case .searchContact(let name, _) = command {
             if let contact = executor.findContact(named: name, in: modelContext) {
                 onNavigateToContact?(contact)
@@ -430,28 +447,37 @@ struct CommandPaletteView: View {
             return
         }
 
-        let result = executor.execute(command, in: modelContext)
-            
-            if let promptCommand = result.requiresConversionPrompt {
-                pendingCommand = promptCommand
-                showConversionAlert = true
-                return
+        // Handle constellation navigation
+        if case .searchConstellation(let name) = command {
+            if let constellation = executor.findConstellation(named: name, in: modelContext) {
+                onNavigateToConstellation?(constellation)
+                isPresented = false
+            } else {
+                resultMessage = "Constellation '\(name)' not found."
+                resultIsError = true
             }
+            return
+        }
 
-            resultMessage = result.message
-            resultIsError = !result.success
+        let result = executor.execute(command, in: modelContext)
+
+        if let promptCommand = result.requiresConversionPrompt {
+            pendingCommand = promptCommand
+            showConversionAlert = true
+            return
+        }
+
+        resultMessage = result.message
+        resultIsError = !result.success
 
         if result.success {
-            // If there's an affected contact, offer navigation
             if let contact = result.affectedContact {
-                // Delay to show the result, then navigate
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     onNavigateToContact?(contact)
                     isPresented = false
                 }
             }
 
-            // Clear input for next command
             inputText = ""
             tokens = []
             suggestions = []

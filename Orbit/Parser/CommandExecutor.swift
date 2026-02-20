@@ -3,8 +3,6 @@ import SwiftData
 
 // MARK: - CommandExecutor
 // Takes a ParsedCommand and executes it against the SwiftData ModelContext.
-// This is the bridge between the text parser and the data layer.
-// It returns a CommandResult so the UI can show confirmation or errors.
 
 struct CommandResult {
     let success: Bool
@@ -36,6 +34,16 @@ final class CommandExecutor {
                 in: context
             )
 
+        case .logConstellationInteraction(let constellationName, let impulse, let tags, let note, let timeMod):
+            result = executeConstellationInteraction(
+                constellationName: constellationName,
+                impulse: impulse,
+                tags: tags,
+                note: note,
+                timeModifier: timeMod,
+                in: context
+            )
+
         case .setArtifact(let name, let key, let value):
             result = executeSetArtifact(contactName: name, key: key, value: value, in: context)
 
@@ -57,6 +65,10 @@ final class CommandExecutor {
         case .searchContact:
             // Search is handled by the UI layer, not the executor
             result = CommandResult(success: true, message: "Navigating to search", affectedContact: nil)
+
+        case .searchConstellation:
+            // Navigation handled by the UI layer
+            result = CommandResult(success: true, message: "Navigating to constellation", affectedContact: nil)
 
         case .undo:
             result = executeUndo(in: context)
@@ -100,9 +112,10 @@ final class CommandExecutor {
         context.insert(interaction)
         contact.refreshLastContactDate()
 
-        // Ensure tags exist at the contact level too
+        // Phase 2.5: Ensure tags exist in the registry (for autocomplete),
+        // but do NOT link them to the contact.
         for tagName in tags {
-            ensureTag(named: tagName, on: contact, in: context)
+            ensureTagInRegistry(named: tagName, in: context)
         }
 
         lastCreatedInteraction = interaction
@@ -112,6 +125,67 @@ final class CommandExecutor {
             success: true,
             message: "Logged \(impulse) with \(contact.name)\(dateStr)",
             affectedContact: contact
+        )
+    }
+
+    // MARK: - Constellation Interaction Fan-out
+
+    private func executeConstellationInteraction(
+        constellationName: String,
+        impulse: String,
+        tags: [String],
+        note: String?,
+        timeModifier: String?,
+        in context: ModelContext
+    ) -> CommandResult {
+        guard let constellation = findConstellation(named: constellationName, in: context) else {
+            return CommandResult(
+                success: false,
+                message: "Constellation '\(constellationName)' not found.",
+                affectedContact: nil
+            )
+        }
+
+        let members = constellation.contacts.filter { !$0.isArchived }
+
+        guard !members.isEmpty else {
+            return CommandResult(
+                success: false,
+                message: "Constellation '\(constellation.name)' has no active members.",
+                affectedContact: nil
+            )
+        }
+
+        let date = CommandParser.resolveTimeModifier(timeModifier)
+
+        for contact in members {
+            let interaction = Interaction(
+                impulse: impulse,
+                content: note ?? "",
+                date: date
+            )
+            interaction.tagNames = tags.joined(separator: ", ")
+            interaction.contact = contact
+            context.insert(interaction)
+            contact.refreshLastContactDate()
+        }
+
+        // Ensure tags exist in registry
+        for tagName in tags {
+            ensureTagInRegistry(named: tagName, in: context)
+        }
+
+        // Track last interaction for undo (pick first member for reference)
+        lastCreatedInteraction = members.first?.interactions
+            .filter { !$0.isDeleted }
+            .sorted { $0.date > $1.date }
+            .first
+
+        let dateStr = timeModifier != nil ? " on \(date.formatted(date: .abbreviated, time: .omitted))" : ""
+        return CommandResult(
+            success: true,
+            message: "Logged \(impulse) for \(members.count) members of \(constellation.name)\(dateStr)",
+            affectedContact: nil
         )
     }
 
@@ -127,7 +201,6 @@ final class CommandExecutor {
             return CommandResult(success: false, message: "Contact '\(contactName)' not found.", affectedContact: nil)
         }
 
-        // Find existing artifact with this key, or create new
         if let existing = contact.artifacts.first(where: { $0.searchableKey == key.lowercased() }) {
             existing.setValue(value)
         } else {
@@ -261,7 +334,7 @@ final class CommandExecutor {
             affectedContact: interaction.contact
         )
     }
-    
+
     // MARK: Artifact Category
     private func parseCategoryAndKey(from rawKey: String) -> (category: String?, key: String) {
         let components = rawKey.split(separator: "/", maxSplits: 1)
@@ -275,7 +348,6 @@ final class CommandExecutor {
     // MARK: - Helpers
 
     /// Find a contact by name (case-insensitive fuzzy match).
-    /// Returns the best match or nil.
     func findContact(named name: String, in context: ModelContext, includeArchived: Bool = false) -> Contact? {
         let searchName = name.lowercased()
 
@@ -318,8 +390,44 @@ final class CommandExecutor {
         return (try? context.fetch(descriptor)) ?? []
     }
 
-    /// Ensure a tag exists and is linked to the contact
-    private func ensureTag(named name: String, on contact: Contact, in context: ModelContext) {
+    /// Find a constellation by name (case-insensitive, with prefix fallback).
+    func findConstellation(named name: String, in context: ModelContext) -> Constellation? {
+        let searchName = name.lowercased()
+
+        let exactPredicate = #Predicate<Constellation> { constellation in
+            constellation.searchableName == searchName
+        }
+        var descriptor = FetchDescriptor<Constellation>(predicate: exactPredicate)
+        descriptor.fetchLimit = 1
+
+        if let exactMatch = try? context.fetch(descriptor).first {
+            return exactMatch
+        }
+
+        // Prefix fallback
+        let prefixPredicate = #Predicate<Constellation> { constellation in
+            constellation.searchableName.starts(with: searchName)
+        }
+        var prefixDescriptor = FetchDescriptor<Constellation>(predicate: prefixPredicate)
+        prefixDescriptor.fetchLimit = 1
+
+        return try? context.fetch(prefixDescriptor).first
+    }
+
+    /// Fetch constellations matching a prefix (for autocomplete)
+    func findConstellationMatches(prefix: String, in context: ModelContext, limit: Int = 5) -> [Constellation] {
+        let searchPrefix = prefix.lowercased()
+        let predicate = #Predicate<Constellation> { constellation in
+            constellation.searchableName.starts(with: searchPrefix)
+        }
+        var descriptor = FetchDescriptor<Constellation>(predicate: predicate)
+        descriptor.fetchLimit = limit
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Ensure a tag name exists in the Tag registry (for autocomplete).
+    /// Phase 2.5: Does NOT link to any contact.
+    private func ensureTagInRegistry(named name: String, in context: ModelContext) {
         let searchName = name.lowercased()
         let predicate = #Predicate<Tag> { tag in
             tag.searchableName == searchName
@@ -327,17 +435,11 @@ final class CommandExecutor {
         var descriptor = FetchDescriptor<Tag>(predicate: predicate)
         descriptor.fetchLimit = 1
 
-        let tag: Tag
-        if let existing = try? context.fetch(descriptor).first {
-            tag = existing
-        } else {
-            tag = Tag(name: name)
-            context.insert(tag)
+        if (try? context.fetch(descriptor).first) != nil {
+            return // Already exists
         }
 
-        // Add to contact if not already linked
-        if !contact.tags.contains(where: { $0.searchableName == searchName }) {
-            contact.tags.append(tag)
-        }
+        let tag = Tag(name: name)
+        context.insert(tag)
     }
 }
