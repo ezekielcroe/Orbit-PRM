@@ -1,15 +1,18 @@
-// This file provides the OrbitSchemaV1 schema for the Orbit app's SwiftData store.
-// If a more complete model definition exists, this should be replaced, but this will resolve the immediate error.
-
-// This file provides the OrbitSchemaV1 schema for the Orbit app's SwiftData store.
-
 import Foundation
+import SwiftUI
 import SwiftData
 
 // MARK: - Models
-// Defined at the top level so they're accessible throughout the module.
-// CloudKit sync requires: no .unique attributes, no .deny delete rules,
-// all properties must be optional or have default values.
+
+// MARK: - AggregatedTag
+// Represents a tag name and how many times it appears across a contact's interactions.
+// Not a SwiftData model — a plain value type returned by computed properties.
+
+struct AggregatedTag: Identifiable, Hashable {
+    let name: String
+    let count: Int
+    var id: String { name }
+}
 
 // MARK: - Contact
 @Model
@@ -39,8 +42,8 @@ final class Contact {
     @Relationship(deleteRule: .cascade, inverse: \Artifact.contact)
     var artifacts: [Artifact] = []
 
-    // Phase 2.5: Tags removed from Contact. Tags live on Interactions only.
-    // Use aggregatedTags to derive tags from interactions.
+    // Tags are interaction-level only — no Contact ↔ Tag relationship.
+    // Use aggregatedTags to see which tags appear across this contact's interactions.
 
     @Relationship(inverse: \Constellation.contacts)
     var constellations: [Constellation] = []
@@ -75,29 +78,6 @@ final class Contact {
         return Calendar.current.dateComponents([.day], from: last, to: Date()).day
     }
 
-    /// Aggregate tags from all non-deleted interactions.
-    /// Returns (tagName, count) pairs sorted by frequency descending.
-    var aggregatedTags: [(name: String, count: Int)] {
-        let activeInteractions = interactions.filter { !$0.isDeleted }
-        var tagCounts: [String: Int] = [:]
-
-        for interaction in activeInteractions {
-            for tag in interaction.tagList {
-                let normalized = tag.lowercased()
-                tagCounts[normalized, default: 0] += 1
-            }
-        }
-
-        return tagCounts
-            .map { (name: $0.key, count: $0.value) }
-            .sorted { $0.count > $1.count }
-    }
-
-    /// Flat list of unique tag names for this contact (derived from interactions).
-    var tagNames: [String] {
-        aggregatedTags.map(\.name)
-    }
-
     func updateSearchableName() {
         searchableName = name.lowercased()
     }
@@ -108,6 +88,106 @@ final class Contact {
             .map(\.date)
             .max()
         modifiedAt = Date()
+    }
+
+    // MARK: - Aggregated Interaction Tags
+    // Tags live on interactions, not contacts. These computed properties
+    // aggregate tag usage across all active interactions for display and filtering.
+
+    /// All tags from this contact's interactions, counted and sorted by frequency
+    var aggregatedTags: [AggregatedTag] {
+        let allTagNames = activeInteractions.flatMap { $0.tagList }
+        guard !allTagNames.isEmpty else { return [] }
+
+        var counts: [String: Int] = [:]
+        for tag in allTagNames {
+            let key = tag.lowercased()
+            counts[key, default: 0] += 1
+        }
+
+        return counts
+            .map { AggregatedTag(name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+    }
+
+    /// Tag names as a flat array (for Spotlight indexing, export, etc.)
+    var tagNames: [String] {
+        aggregatedTags.map(\.name)
+    }
+
+    /// Check if this contact has any interaction with the given tag
+    func hasInteractionTag(_ tagName: String) -> Bool {
+        let search = tagName.lowercased()
+        return aggregatedTags.contains { $0.name == search }
+    }
+
+    // MARK: - Drift Detection (single source of truth)
+
+    /// Expected maximum days between interactions for this contact's orbit zone
+    var cadenceThreshold: Int {
+        switch targetOrbit {
+        case 0: return 7      // Inner Circle: weekly
+        case 1: return 30     // Near Orbit: monthly
+        case 2: return 90     // Mid Orbit: quarterly
+        case 3: return 365    // Outer Orbit: yearly
+        case 4: return Int.max // Deep Space: no threshold
+        default: return 90
+        }
+    }
+
+    /// Whether this contact has exceeded the cadence threshold for their orbit zone
+    var isDrifting: Bool {
+        guard targetOrbit < 4 else { return false }
+        guard let days = daysSinceLastContact else {
+            return true // Never contacted and not Deep Space
+        }
+        return days > cadenceThreshold
+    }
+
+    /// How severely this contact is drifting (>1 means past threshold)
+    var driftRatio: Double {
+        guard let days = daysSinceLastContact else { return 2.0 }
+        let threshold = Double(cadenceThreshold)
+        guard threshold > 0 else { return 0 }
+        return Double(days) / threshold
+    }
+
+    /// Priority score for sorting drifting contacts. Higher = more urgent.
+    var driftPriority: Double {
+        let threshold = Double(cadenceThreshold)
+        let days = Double(daysSinceLastContact ?? 999)
+        let orbitWeight = Double(5 - targetOrbit)
+        return max(0, (days - threshold) / max(threshold, 1)) * orbitWeight
+    }
+
+    /// Colour representing drift severity
+    var driftColor: Color {
+        if driftRatio > 3.0 { return .red }
+        if driftRatio > 1.5 { return .orange }
+        if isDrifting { return .yellow }
+        return .secondary
+    }
+
+    /// Active (non-deleted) interactions, sorted most recent first
+    var activeInteractions: [Interaction] {
+        interactions
+            .filter { !$0.isDeleted }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Human-readable recency description
+    var recencyDescription: String {
+        guard let days = daysSinceLastContact else { return "No interactions" }
+        switch days {
+        case 0: return "Today"
+        case 1: return "Yesterday"
+        case 2...6: return "\(days) days ago"
+        case 7...13: return "Last week"
+        case 14...29: return "\(days / 7) weeks ago"
+        case 30...59: return "Last month"
+        case 60...364: return "\(days / 30) months ago"
+        default: return "Over a year ago"
+        }
     }
 }
 
@@ -131,7 +211,7 @@ final class Interaction {
     }
 
     var tagList: [String] {
-        tagNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        tagNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
     }
 }
 
@@ -205,9 +285,9 @@ final class Artifact {
 }
 
 // MARK: - Tag
-// Phase 2.5: Tag is now a standalone registry for autocomplete/browsing.
-// No relationship to Contact. Tags are created when used in commands
-// and stored as strings on Interaction.tagNames.
+// Tag is a name registry for autocomplete in the command palette.
+// Tags are NOT linked to contacts. They exist so the palette can suggest
+// previously-used tag names. Actual tag data lives on Interaction.tagNames.
 @Model
 final class Tag {
     var id: UUID = UUID()
@@ -245,6 +325,7 @@ final class Constellation {
 }
 
 // MARK: - Versioned Schema
+
 enum OrbitSchemaV1: VersionedSchema {
     static var versionIdentifier = Schema.Version(1, 0, 0)
 

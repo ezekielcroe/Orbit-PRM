@@ -6,7 +6,7 @@ import SwiftData
 // with real-time syntax highlighting and contextual autocomplete.
 //
 // Flow:
-// 1. User types using operators (@, !, #, >, ^)
+// 1. User types using operators (@, *, !, #, >, ^)
 // 2. Tokenizer runs on every keystroke (debounced)
 // 3. Autocomplete suggestions appear based on current token context
 // 4. On submit, the parser resolves a ParsedCommand
@@ -19,7 +19,6 @@ struct CommandPaletteView: View {
 
     @Binding var isPresented: Bool
     var onNavigateToContact: ((Contact) -> Void)?
-    var onNavigateToConstellation: ((Constellation) -> Void)?
 
     @State private var inputText = ""
     @State private var tokens: [Token] = []
@@ -27,7 +26,7 @@ struct CommandPaletteView: View {
     @State private var resultMessage: String?
     @State private var resultIsError = false
     @State private var debounceTask: Task<Void, Never>?
-
+    
     @State private var pendingCommand: ParsedCommand?
     @State private var showConversionAlert = false
 
@@ -35,7 +34,7 @@ struct CommandPaletteView: View {
 
     private let parser = CommandParser()
 
-    // Fetch contacts, tags, and constellations for autocomplete
+    // Fetch contacts and tags for autocomplete
     @Query(filter: #Predicate<Contact> { !$0.isArchived }, sort: \Contact.name)
     private var contacts: [Contact]
 
@@ -46,72 +45,73 @@ struct CommandPaletteView: View {
     private var constellations: [Constellation]
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Input area
-                inputSection
+            NavigationStack {
+                VStack(spacing: 0) {
+                    // Scrollable content area above input
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            Spacer()
+                            
+                            if let message = resultMessage {
+                                resultView(message: message)
+                            } else if !suggestions.isEmpty {
+                                suggestionList
+                            } else {
+                                syntaxHelp
+                            }
+                        }
+                        .frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .frame(maxHeight: .infinity)
 
-                Divider()
+                    Divider()
 
-                // Suggestions / result
-                if let message = resultMessage {
-                    resultView(message: message)
-                } else if !suggestions.isEmpty {
-                    suggestionList
-                } else {
-                    syntaxHelp
+                    // Input area always visible and pinned to bottom
+                    inputSection
                 }
-
-                Spacer()
-            }
-            .navigationTitle("Command Palette")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    operatorButtons
-                }
-            }
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        isPresented = false
-                        dismiss()
+                .navigationTitle("Command Palette")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") {
+                            isPresented = false
+                            dismiss()
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Execute", systemImage: "return") {
+                            executeCommand()
+                        }
+                        .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .keyboardShortcut(.return, modifiers: [])
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Execute", systemImage: "return") {
-                        executeCommand()
+                .onAppear {
+                    isInputFocused = true
+                }
+                
+                .alert("Convert to List?", isPresented: $showConversionAlert) {
+                    Button("Convert") {
+                        if let cmd = pendingCommand {
+                            executeCommand(commandToExecute: cmd)
+                        }
                     }
-                    .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .keyboardShortcut(.return, modifiers: [])
-                }
-            }
-            .onAppear {
-                isInputFocused = true
-            }
-
-            .alert("Convert to List?", isPresented: $showConversionAlert) {
-                Button("Convert") {
-                    if let cmd = pendingCommand {
-                        executeCommand(commandToExecute: cmd)
+                    Button("Cancel", role: .cancel) {
+                        pendingCommand = nil
                     }
+                } message: {
+                    Text("This artifact holds a single value. Converting it allows multiple items.")
                 }
-                Button("Cancel", role: .cancel) {
-                    pendingCommand = nil
-                }
-            } message: {
-                Text("This artifact holds a single value. Converting it allows multiple items.")
             }
         }
-    }
 
     // MARK: - Input Section
 
     private var inputSection: some View {
         VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            // Token-highlighted display of parsed input
             if !tokens.isEmpty {
                 highlightedTokensView
                     .padding(.horizontal, OrbitSpacing.md)
@@ -122,7 +122,7 @@ struct CommandPaletteView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
 
-                TextField("@contact or *group !action #tag \"note\"", text: $inputText)
+                TextField("@contact !action #tag \"note\"", text: $inputText)
                     .font(OrbitTypography.commandInput)
                     .focused($isInputFocused)
                     .onSubmit { executeCommand() }
@@ -152,24 +152,25 @@ struct CommandPaletteView: View {
             .padding(.horizontal, OrbitSpacing.md)
             .padding(.top, OrbitSpacing.md)
 
-            #if os(macOS)
-            HStack(spacing: OrbitSpacing.sm) {
-                operatorButtons
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: OrbitSpacing.sm) {
+                    operatorButtons
+                }
+                .padding(.horizontal, OrbitSpacing.md)
             }
-            .padding(.horizontal, OrbitSpacing.md)
-            #endif
+            .padding(.bottom, OrbitSpacing.md)
         }
     }
 
-    // MARK: - Operator Quick-Insert Buttons
+    // MARK: - Operator Quick-Insert Buttons (Accessory Rail)
 
     @ViewBuilder
     private var operatorButtons: some View {
         Group {
             operatorButton("@", label: "Contact", color: OrbitColors.syntaxEntity)
-            operatorButton("*", label: "Group", color: OrbitColors.syntaxConstellation)
             operatorButton("!", label: "Action", color: OrbitColors.syntaxImpulse)
             operatorButton("#", label: "Tag", color: OrbitColors.syntaxTag)
+            operatorButton("*", label: "Group", color: OrbitColors.syntaxConstellation)
             operatorButton(">", label: "Artifact", color: OrbitColors.syntaxArtifact)
             operatorButton("^", label: "Time", color: OrbitColors.syntaxTime)
             operatorButton("\"", label: "Note", color: OrbitColors.syntaxQuote)
@@ -178,6 +179,7 @@ struct CommandPaletteView: View {
 
     private func operatorButton(_ op: String, label: String, color: Color) -> some View {
         Button {
+            // Add a space before the operator if input doesn't end with one
             if !inputText.isEmpty && !inputText.hasSuffix(" ") {
                 inputText += " "
             }
@@ -197,6 +199,7 @@ struct CommandPaletteView: View {
     // MARK: - Token Highlighting
 
     private var highlightedTokensView: some View {
+        // Build an AttributedString-like view from tokens
         HStack(spacing: 2) {
             ForEach(tokens) { token in
                 Text(tokenDisplayText(token))
@@ -209,9 +212,9 @@ struct CommandPaletteView: View {
     private func tokenDisplayText(_ token: Token) -> String {
         switch token.kind {
         case .entity: return "@\(token.value)"
-        case .constellation: return "*\(token.value)"
         case .impulse: return "!\(token.value)"
         case .tag: return "#\(token.value)"
+        case .constellation: return "*\(token.value)"
         case .artifactKey: return ">\(token.value)"
         case .artifactOp: return token.value
         case .artifactValue: return token.value
@@ -225,9 +228,9 @@ struct CommandPaletteView: View {
     private func colorForToken(_ token: Token) -> Color {
         switch token.kind {
         case .entity: return OrbitColors.syntaxEntity
-        case .constellation: return OrbitColors.syntaxConstellation
         case .impulse: return OrbitColors.syntaxImpulse
         case .tag: return OrbitColors.syntaxTag
+        case .constellation: return OrbitColors.syntaxConstellation
         case .artifactKey, .artifactOp, .artifactValue: return OrbitColors.syntaxArtifact
         case .timeModifier: return OrbitColors.syntaxTime
         case .quotedText: return OrbitColors.syntaxQuote
@@ -239,17 +242,25 @@ struct CommandPaletteView: View {
     // MARK: - Suggestions
 
     private var suggestionList: some View {
-        List {
-            ForEach(suggestions) { suggestion in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(suggestions.reversed()) { suggestion in
                 Button {
                     applySuggestion(suggestion)
                 } label: {
                     Label(suggestion.label, systemImage: suggestion.icon)
                         .font(OrbitTypography.commandSuggestion)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, OrbitSpacing.md)
+                        .padding(.vertical, OrbitSpacing.sm)
+                }
+                .buttonStyle(.plain)
+
+                if suggestion.id != suggestions.first?.id {
+                    Divider().padding(.leading, OrbitSpacing.md)
                 }
             }
         }
-        .listStyle(.plain)
+        .padding(.vertical, OrbitSpacing.xs)
     }
 
     // MARK: - Syntax Help
@@ -263,12 +274,14 @@ struct CommandPaletteView: View {
 
             Group {
                 syntaxHelpRow("@Sarah !Coffee", "Log a coffee with Sarah")
-                syntaxHelpRow("*Family !Call \"Sunday check-in\"", "Log a call for everyone in Family")
                 syntaxHelpRow("@Tom > likes + Jazz", "Add Jazz to Tom's likes")
+                syntaxHelpRow("@Tom > likes - Jazz", "Remove Jazz from Tom's likes")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
                 syntaxHelpRow("@Sarah !Meeting #Work \"Discussed merger\"", "Detailed log with tag and note")
+                syntaxHelpRow("@Sarah *Family", "Add Sarah to Family constellation")
+                syntaxHelpRow("@Sarah *-Family", "Remove Sarah from Family")
+                syntaxHelpRow("*Family !Call #chat", "Log a call for everyone in Family")
                 syntaxHelpRow("@Sarah", "Open Sarah's contact page")
-                syntaxHelpRow("*Family", "Open Family constellation")
                 syntaxHelpRow("!undo", "Undo the last logged interaction")
             }
         }
@@ -317,6 +330,7 @@ struct CommandPaletteView: View {
     private func updateSuggestions() {
         suggestions = []
 
+        // Find the last token being typed to determine context
         guard let lastToken = tokens.last else { return }
 
         switch lastToken.kind {
@@ -335,22 +349,8 @@ struct CommandPaletteView: View {
                     )
                 }
 
-        case .constellation:
-            // Suggest matching constellations
-            let prefix = lastToken.value.lowercased()
-            suggestions = constellations
-                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
-                .prefix(6)
-                .map { constellation in
-                    CommandSuggestion(
-                        icon: "star.circle",
-                        label: "\(constellation.name) (\(constellation.contacts.count))",
-                        insertion: "*\(constellation.name) ",
-                        kind: .constellation
-                    )
-                }
-
         case .impulse:
+            // Suggest common impulse types
             let prefix = lastToken.value.lowercased()
             let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
             suggestions = commonImpulses
@@ -365,6 +365,7 @@ struct CommandPaletteView: View {
                 }
 
         case .tag:
+            // Suggest existing tags
             let prefix = lastToken.value.lowercased()
             suggestions = tags
                 .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
@@ -378,7 +379,26 @@ struct CommandPaletteView: View {
                     )
                 }
 
+        case .constellation:
+            // Suggest existing constellations
+            let rawValue = lastToken.value
+            let isRemoval = rawValue.hasPrefix("-")
+            let prefix = (isRemoval ? String(rawValue.dropFirst()) : rawValue).lowercased()
+            let removePrefix = isRemoval ? "*-" : "*"
+            suggestions = constellations
+                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
+                .prefix(6)
+                .map { constellation in
+                    CommandSuggestion(
+                        icon: "star.circle",
+                        label: (isRemoval ? "Remove from " : "") + constellation.name,
+                        insertion: "\(removePrefix)\(constellation.name) ",
+                        kind: .constellation
+                    )
+                }
+
         case .artifactKey:
+            // Suggest existing artifact keys for the selected contact
             if let entityToken = tokens.first(where: { $0.kind == .entity }),
                let contact = executor.findContact(named: entityToken.value, in: modelContext) {
                 let prefix = lastToken.value.lowercased()
@@ -401,13 +421,12 @@ struct CommandPaletteView: View {
     }
 
     private func applySuggestion(_ suggestion: CommandSuggestion) {
+        // Replace the text from the last operator to the cursor with the suggestion
+        // For simplicity in Phase 1, we replace based on the suggestion kind
         switch suggestion.kind {
         case .contact:
+            // Replace everything up to and including the @token
             if let range = inputText.range(of: "@", options: .backwards) {
-                inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
-            }
-        case .constellation:
-            if let range = inputText.range(of: "*", options: .backwards) {
                 inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
             }
         case .impulse:
@@ -416,6 +435,10 @@ struct CommandPaletteView: View {
             }
         case .tag:
             if let range = inputText.range(of: "#", options: .backwards) {
+                inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
+            }
+        case .constellation:
+            if let range = inputText.range(of: "*", options: .backwards) {
                 inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
             }
         case .artifactKey:
@@ -435,7 +458,7 @@ struct CommandPaletteView: View {
     private func executeCommand(commandToExecute: ParsedCommand? = nil) {
         let command = commandToExecute ?? parser.parse(inputText)
 
-        // Handle contact navigation
+        // The executor is for data mutations; navigation is a UI concern.
         if case .searchContact(let name, _) = command {
             if let contact = executor.findContact(named: name, in: modelContext) {
                 onNavigateToContact?(contact)
@@ -447,37 +470,28 @@ struct CommandPaletteView: View {
             return
         }
 
-        // Handle constellation navigation
-        if case .searchConstellation(let name) = command {
-            if let constellation = executor.findConstellation(named: name, in: modelContext) {
-                onNavigateToConstellation?(constellation)
-                isPresented = false
-            } else {
-                resultMessage = "Constellation '\(name)' not found."
-                resultIsError = true
-            }
-            return
-        }
-
         let result = executor.execute(command, in: modelContext)
+            
+            if let promptCommand = result.requiresConversionPrompt {
+                pendingCommand = promptCommand
+                showConversionAlert = true
+                return
+            }
 
-        if let promptCommand = result.requiresConversionPrompt {
-            pendingCommand = promptCommand
-            showConversionAlert = true
-            return
-        }
-
-        resultMessage = result.message
-        resultIsError = !result.success
+            resultMessage = result.message
+            resultIsError = !result.success
 
         if result.success {
+            // If there's an affected contact, offer navigation
             if let contact = result.affectedContact {
+                // Delay to show the result, then navigate
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     onNavigateToContact?(contact)
                     isPresented = false
                 }
             }
 
+            // Clear input for next command
             inputText = ""
             tokens = []
             suggestions = []

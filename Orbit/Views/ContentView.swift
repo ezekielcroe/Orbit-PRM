@@ -1,16 +1,12 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - ContentView (Phase 2)
-// Updates from Phase 1:
-// - Added Review, Table View, and Settings sections
-// - Handles Spotlight deep-linking (navigates to contact from system search)
-// - Notification-based menu command handling for macOS
-// - Result toast with animation
+// MARK: - ContentView (Refactored)
+// No sidebar. PeopleView IS the primary content. Settings is accessed
+// via a toolbar gear button (sheet on iOS, Settings window on macOS).
 //
-
-import SwiftUI
-import SwiftData
+// Two-column NavigationSplitView:
+//   People list → Contact detail
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -19,48 +15,18 @@ struct ContentView: View {
 
     @Binding var spotlightContactID: UUID?
 
-    @State private var selectedSection: NavigationSection? = .dashboard
     @State private var selectedContact: Contact?
     @State private var showCommandPalette = false
+    @State private var showSettings = false
     @State private var commandResultMessage: String?
-
-    enum NavigationSection: String, CaseIterable, Identifiable {
-        case dashboard = "Dashboard"
-        case contacts = "Contacts"
-        case review = "Review"
-        case table = "Table"
-        case constellations = "Constellations"
-        case tags = "Tags"
-        case settings = "Settings"
-
-        var id: String { rawValue }
-
-        var icon: String {
-            switch self {
-            case .dashboard: return "circle.grid.2x2"
-            case .contacts: return "person.2"
-            case .review: return "eye"
-            case .table: return "tablecells"
-            case .constellations: return "star.circle"
-            case .tags: return "tag"
-            case .settings: return "gear"
-            }
-        }
-
-        static var primarySections: [NavigationSection] {
-            [.dashboard, .contacts, .review, .table]
-        }
-
-        static var organizationSections: [NavigationSection] {
-            [.constellations, .tags]
-        }
-    }
 
     var body: some View {
         NavigationSplitView {
-            sidebar
-        } content: {
-            contentPanel
+            PeopleView(
+                selectedContact: $selectedContact,
+                showCommandPalette: $showCommandPalette,
+                showSettings: $showSettings
+            )
         } detail: {
             detailPanel
         }
@@ -69,16 +35,24 @@ struct ContentView: View {
                 isPresented: $showCommandPalette,
                 onNavigateToContact: { contact in
                     selectedContact = contact
-                    selectedSection = .contacts
                     spotlightIndexer.index(contact: contact)
-                },
-                onNavigateToConstellation: { _ in
-                    // Navigate to the Constellations section
-                    selectedSection = .constellations
                 }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                SettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showSettings = false }
+                        }
+                    }
+            }
+            #if os(iOS)
+            .presentationDetents([.large])
+            #endif
         }
         .overlay(alignment: .bottom) {
             resultToast
@@ -93,86 +67,16 @@ struct ContentView: View {
             showCommandPalette = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .newContactRequested)) { _ in
-            selectedSection = .contacts
+            // Already on People
         }
         .onReceive(NotificationCenter.default.publisher(for: .showDashboardRequested)) { _ in
-            selectedSection = .dashboard
+            // Already on People
         }
         .onReceive(NotificationCenter.default.publisher(for: .showContactsRequested)) { _ in
-            selectedSection = .contacts
+            // Already on People
         }
         .task {
             spotlightIndexer.reindexAll(from: modelContext)
-        }
-    }
-
-    // MARK: - Sidebar
-
-    private var sidebar: some View {
-        List(selection: $selectedSection) {
-            Section("Views") {
-                ForEach(NavigationSection.primarySections) { section in
-                    Label(section.rawValue, systemImage: section.icon)
-                        .tag(section)
-                }
-            }
-
-            Section("Organize") {
-                ForEach(NavigationSection.organizationSections) { section in
-                    Label(section.rawValue, systemImage: section.icon)
-                        .tag(section)
-                }
-            }
-
-            #if os(iOS)
-            Section {
-                Label(NavigationSection.settings.rawValue, systemImage: NavigationSection.settings.icon)
-                    .tag(NavigationSection.settings)
-            }
-            #endif
-        }
-        .navigationTitle("Orbit")
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    showCommandPalette = true
-                } label: {
-                    Image(systemName: "terminal")
-                }
-                .help("Command Palette (⌘K)")
-                .keyboardShortcut("k", modifiers: .command)
-            }
-        }
-        #if os(macOS)
-        .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-        #endif
-    }
-
-    // MARK: - Content Panel
-
-    @ViewBuilder
-    private var contentPanel: some View {
-        switch selectedSection {
-        case .dashboard:
-            DashboardView(
-                selectedContact: $selectedContact,
-                showCommandPalette: $showCommandPalette
-            )
-        case .contacts:
-            ContactListView(selectedContact: $selectedContact)
-        case .review:
-            ReviewDashboardView()
-        case .table:
-            TabularView()
-        case .constellations:
-            ConstellationListView()
-        case .tags:
-            TagListView()
-        case .settings:
-            SettingsView()
-        case .none:
-            Text("Select a section")
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -222,7 +126,6 @@ struct ContentView: View {
 
         if let contact = try? modelContext.fetch(descriptor).first {
             selectedContact = contact
-            selectedSection = .contacts
         }
     }
 }

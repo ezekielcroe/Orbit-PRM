@@ -15,32 +15,22 @@ struct TabularView: View {
     @Query(sort: [SortDescriptor(\Contact.name)])
     private var allContacts: [Contact]
 
-    @Query(sort: \Constellation.name)
-    private var constellations: [Constellation]
-
-    @State private var sortBy: SortOption = .name
+    @State private var sortColumn: SortColumn = .name
     @State private var sortAscending = true
     @State private var selectedContacts: Set<UUID> = []
     @State private var showBatchAction = false
     @State private var filterOrbit: Int?
     @State private var showArchived = false
     @State private var searchText = ""
-    @State private var groupBy: GroupOption = .none
 
-    enum SortOption: String, CaseIterable {
+    enum SortColumn: String, CaseIterable {
         case name = "Name"
         case orbit = "Orbit"
         case lastContact = "Last Contact"
         case interactions = "Interactions"
+        case artifacts = "Artifacts"
+        case tags = "Tags"
     }
-
-    enum GroupOption: String, CaseIterable {
-        case none = "None"
-        case orbit = "Orbit Zone"
-        case constellation = "Constellation"
-    }
-
-    // MARK: - Filtering & Sorting
 
     private var filteredAndSorted: [Contact] {
         var result = allContacts
@@ -55,16 +45,12 @@ struct TabularView: View {
 
         if !searchText.isEmpty {
             let query = searchText.lowercased()
-            result = result.filter {
-                $0.searchableName.contains(query)
-                || $0.constellations.contains(where: { $0.searchableName.contains(query) })
-                || $0.tagNames.contains(where: { $0.contains(query) })
-            }
+            result = result.filter { $0.searchableName.contains(query) }
         }
 
         result.sort { a, b in
             let comparison: Bool
-            switch sortBy {
+            switch sortColumn {
             case .name:
                 comparison = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             case .orbit:
@@ -72,7 +58,11 @@ struct TabularView: View {
             case .lastContact:
                 comparison = (a.lastContactDate ?? .distantPast) > (b.lastContactDate ?? .distantPast)
             case .interactions:
-                comparison = a.interactions.filter({ !$0.isDeleted }).count > b.interactions.filter({ !$0.isDeleted }).count
+                comparison = a.activeInteractions.count > b.activeInteractions.count
+            case .artifacts:
+                comparison = a.artifacts.count > b.artifacts.count
+            case .tags:
+                comparison = a.aggregatedTags.count > b.aggregatedTags.count
             }
             return sortAscending ? comparison : !comparison
         }
@@ -80,50 +70,9 @@ struct TabularView: View {
         return result
     }
 
-    // MARK: - Grouping
-
-    private var groupedContacts: [(title: String, contacts: [Contact])] {
-        let contacts = filteredAndSorted
-
-        switch groupBy {
-        case .none:
-            return [(title: "", contacts: contacts)]
-
-        case .orbit:
-            let grouped = Dictionary(grouping: contacts) { $0.targetOrbit }
-            return OrbitZone.allZones.compactMap { zone in
-                guard let members = grouped[zone.id], !members.isEmpty else { return nil }
-                return (title: zone.name, contacts: members)
-            }
-
-        case .constellation:
-            // Group by constellation. Contacts can appear in multiple groups.
-            // Also include an "Ungrouped" section for contacts with no constellation.
-            var sections: [(title: String, contacts: [Contact])] = []
-
-            for constellation in constellations {
-                let members = contacts.filter { contact in
-                    contact.constellations.contains(where: { $0.id == constellation.id })
-                }
-                if !members.isEmpty {
-                    sections.append((title: constellation.name, contacts: members))
-                }
-            }
-
-            let ungrouped = contacts.filter { $0.constellations.isEmpty }
-            if !ungrouped.isEmpty {
-                sections.append((title: "Ungrouped", contacts: ungrouped))
-            }
-
-            return sections
-        }
-    }
-
-    // MARK: - Body
-
     var body: some View {
         VStack(spacing: 0) {
-            controlBar
+            filterBar
             Divider()
 
             if filteredAndSorted.isEmpty {
@@ -133,15 +82,14 @@ struct TabularView: View {
                     description: Text("Adjust your filters or add contacts.")
                 )
             } else {
-                contactList
+                tableContent
             }
         }
         .navigationTitle("Table View")
-        .searchable(text: $searchText, prompt: "Filter by name, tag, or constellation")
+        .searchable(text: $searchText, prompt: "Filter by name")
         .sheet(isPresented: $showBatchAction) {
             BatchActionSheet(
                 selectedCount: selectedContacts.count,
-                constellations: constellations,
                 onApply: { action in
                     applyBatchAction(action)
                     showBatchAction = false
@@ -150,259 +98,203 @@ struct TabularView: View {
         }
     }
 
-    // MARK: - Control Bar
+    // MARK: - Filter Bar
 
-    private var controlBar: some View {
-        VStack(spacing: OrbitSpacing.sm) {
-            // Top row: filters
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: OrbitSpacing.sm) {
-                    // Group by
-                    Menu {
-                        ForEach(GroupOption.allCases, id: \.self) { option in
-                            Button {
-                                groupBy = option
-                            } label: {
-                                HStack {
-                                    Text(option.rawValue)
-                                    if groupBy == option {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(
-                            groupBy == .none ? "Group" : groupBy.rawValue,
-                            systemImage: "rectangle.3.group"
-                        )
-                        .font(OrbitTypography.caption)
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: OrbitSpacing.sm) {
+                Menu {
+                    Button("All Orbits") { filterOrbit = nil }
+                    Divider()
+                    ForEach(OrbitZone.allZones, id: \.id) { zone in
+                        Button(zone.name) { filterOrbit = zone.id }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    // Sort by
-                    Menu {
-                        ForEach(SortOption.allCases, id: \.self) { option in
-                            Button {
-                                if sortBy == option {
-                                    sortAscending.toggle()
-                                } else {
-                                    sortBy = option
-                                    sortAscending = true
-                                }
-                            } label: {
-                                HStack {
-                                    Text(option.rawValue)
-                                    if sortBy == option {
-                                        Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        Label("Sort: \(sortBy.rawValue)", systemImage: "arrow.up.arrow.down")
-                            .font(OrbitTypography.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    // Orbit filter
-                    Menu {
-                        Button("All Orbits") { filterOrbit = nil }
-                        Divider()
-                        ForEach(OrbitZone.allZones, id: \.id) { zone in
-                            Button(zone.name) { filterOrbit = zone.id }
-                        }
-                    } label: {
-                        Label(
-                            filterOrbit != nil ? OrbitZone.name(for: filterOrbit!) : "All Orbits",
-                            systemImage: "circle.dotted"
-                        )
-                        .font(OrbitTypography.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Toggle("Archived", isOn: $showArchived)
-                        .toggleStyle(.button)
-                        .controlSize(.small)
-                }
-                .padding(.horizontal, OrbitSpacing.md)
-            }
-
-            // Bottom row: selection controls
-            if !selectedContacts.isEmpty || !filteredAndSorted.isEmpty {
-                HStack(spacing: OrbitSpacing.sm) {
-                    // Select all / deselect
-                    Button(selectedContacts.count == filteredAndSorted.count ? "Deselect All" : "Select All") {
-                        if selectedContacts.count == filteredAndSorted.count {
-                            selectedContacts.removeAll()
-                        } else {
-                            selectedContacts = Set(filteredAndSorted.map(\.id))
-                        }
-                    }
-                    .controlSize(.small)
-                    .font(OrbitTypography.caption)
-
-                    Spacer()
-
-                    if !selectedContacts.isEmpty {
-                        Text("\(selectedContacts.count) selected")
-                            .font(OrbitTypography.captionMedium)
-                            .foregroundStyle(.secondary)
-
-                        Button("Batch Action") {
-                            showBatchAction = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-
-                        Button("Clear") {
-                            selectedContacts.removeAll()
-                        }
-                        .controlSize(.small)
-                    }
-
-                    Text("\(filteredAndSorted.count) contact\(filteredAndSorted.count == 1 ? "" : "s")")
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, OrbitSpacing.md)
-            }
-        }
-        .padding(.vertical, OrbitSpacing.sm)
-    }
-
-    // MARK: - Contact List
-
-    private var contactList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: groupBy != .none ? [.sectionHeaders] : []) {
-                ForEach(groupedContacts, id: \.title) { group in
-                    Section {
-                        ForEach(group.contacts) { contact in
-                            contactCard(contact)
-                            Divider()
-                                .padding(.leading, OrbitSpacing.xxl)
-                        }
-                    } header: {
-                        if !group.title.isEmpty {
-                            sectionHeader(group.title, count: group.contacts.count)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Section Header
-
-    private func sectionHeader(_ title: String, count: Int) -> some View {
-        HStack(spacing: OrbitSpacing.sm) {
-            if groupBy == .constellation {
-                Image(systemName: "star.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(title == "Ungrouped" ? .secondary : OrbitColors.syntaxConstellation)
-            }
-
-            Text(title.uppercased())
-                .font(OrbitTypography.captionMedium)
-                .tracking(1)
-                .foregroundStyle(.secondary)
-
-            Text("\(count)")
-                .font(OrbitTypography.footnote)
-                .foregroundStyle(.tertiary)
-
-            Spacer()
-        }
-        .padding(.horizontal, OrbitSpacing.md)
-        .padding(.vertical, OrbitSpacing.sm)
-        .background(.ultraThinMaterial)
-    }
-
-    // MARK: - Contact Card
-
-    private func contactCard(_ contact: Contact) -> some View {
-        let isSelected = selectedContacts.contains(contact.id)
-        let activeCount = contact.interactions.filter { !$0.isDeleted }.count
-
-        return HStack(alignment: .top, spacing: OrbitSpacing.md) {
-            // Selection checkbox
-            Button {
-                if isSelected { selectedContacts.remove(contact.id) }
-                else { selectedContacts.insert(contact.id) }
-            } label: {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? .blue : .secondary)
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-
-            // Content
-            VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
-                // Name + orbit
-                HStack(alignment: .firstTextBaseline) {
-                    Text(contact.name)
-                        .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                        .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
-
-                    Spacer()
-
-                    Text(contact.orbitZoneName)
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
-                }
-
-                // Metadata row
-                HStack(spacing: OrbitSpacing.md) {
+                } label: {
                     Label(
-                        contact.lastContactDate?.relativeDescription ?? "Never",
-                        systemImage: "clock"
+                        filterOrbit != nil ? OrbitZone.name(for: filterOrbit!) : "All Orbits",
+                        systemImage: "circle.dotted"
                     )
                     .font(OrbitTypography.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Toggle("Archived", isOn: $showArchived)
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+
+                Spacer()
+
+                if !selectedContacts.isEmpty {
+                    Text("\(selectedContacts.count) selected")
+                        .font(OrbitTypography.captionMedium)
+                        .foregroundStyle(.secondary)
+
+                    Button("Batch Action") {
+                        showBatchAction = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Clear") {
+                        selectedContacts.removeAll()
+                    }
+                    .controlSize(.small)
+                }
+
+                Button(selectedContacts.count == filteredAndSorted.count ? "Deselect All" : "Select All") {
+                    if selectedContacts.count == filteredAndSorted.count {
+                        selectedContacts.removeAll()
+                    } else {
+                        selectedContacts = Set(filteredAndSorted.map(\.id))
+                    }
+                }
+                .controlSize(.small)
+            }
+            .padding(.horizontal, OrbitSpacing.md)
+            .padding(.vertical, OrbitSpacing.sm)
+        }
+    }
+
+    // MARK: - Table Content
+
+    private var tableContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                tableHeaderRow
+                Divider()
+                ForEach(filteredAndSorted) { contact in
+                    tableDataRow(contact: contact)
+                    Divider()
+                }
+            }
+        }
+    }
+
+    private var tableHeaderRow: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: 32)
+            columnHeader("Name", column: .name, minWidth: 140)
+            columnHeader("Orbit", column: .orbit, minWidth: 100)
+            columnHeader("Last Contact", column: .lastContact, minWidth: 100)
+            columnHeader("Interactions", column: .interactions, minWidth: 80)
+            columnHeader("Tags", column: .tags, minWidth: 120)
+        }
+        .padding(.horizontal, OrbitSpacing.sm)
+        .padding(.vertical, OrbitSpacing.sm)
+        .background(Color.secondary.opacity(0.05))
+    }
+
+    private func columnHeader(_ title: String, column: SortColumn, minWidth: CGFloat) -> some View {
+        Button {
+            if sortColumn == column {
+                sortAscending.toggle()
+            } else {
+                sortColumn = column
+                sortAscending = true
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(OrbitTypography.captionMedium)
                     .foregroundStyle(.secondary)
-
-                    Text("·")
-                        .foregroundStyle(.quaternary)
-
-                    Text("\(activeCount) log\(activeCount == 1 ? "" : "s")")
-                        .font(OrbitTypography.caption)
+                if sortColumn == column {
+                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.secondary)
                 }
-
-                // Tags (aggregated from interactions)
-                if !contact.aggregatedTags.isEmpty {
-                    Text(
-                        contact.aggregatedTags.prefix(5).map { tag in
-                            tag.count > 1 ? "#\(tag.name) ×\(tag.count)" : "#\(tag.name)"
-                        }.joined(separator: "  ")
-                    )
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(OrbitColors.syntaxTag.opacity(0.7))
-                    .lineLimit(1)
-                }
-
-                // Constellations
-                if !contact.constellations.isEmpty {
-                    Text(
-                        contact.constellations.map { "★ \($0.name)" }.joined(separator: "  ")
-                    )
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(OrbitColors.syntaxConstellation.opacity(0.7))
-                    .lineLimit(1)
-                }
             }
         }
-        .padding(.horizontal, OrbitSpacing.md)
-        .padding(.vertical, OrbitSpacing.sm)
-        .background(isSelected ? Color.blue.opacity(0.04) : Color.clear)
+        .buttonStyle(.plain)
+        .frame(minWidth: minWidth, alignment: .leading)
+    }
+
+    private func tableDataRow(contact: Contact) -> some View {
+        let isSelected = selectedContacts.contains(contact.id)
+        let tagDisplay = contact.aggregatedTags.prefix(3).map { "#\($0.name)" }.joined(separator: ", ")
+
+        #if os(iOS)
+        return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            HStack {
+                Button {
+                    if isSelected { selectedContacts.remove(contact.id) }
+                    else { selectedContacts.insert(contact.id) }
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(isSelected ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+
+                Text(contact.name).font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                Spacer()
+                Text(contact.orbitZoneName).font(OrbitTypography.caption).foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Text("Last: \(contact.lastContactDate?.relativeDescription ?? "Never")")
+                    .font(OrbitTypography.caption)
+                Spacer()
+                Text("Logs: \(contact.activeInteractions.count)")
+                    .font(OrbitTypography.caption)
+            }
+
+            if !tagDisplay.isEmpty {
+                Text(tagDisplay)
+                    .font(OrbitTypography.footnote).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(OrbitSpacing.sm)
+        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
             if isSelected { selectedContacts.remove(contact.id) }
             else { selectedContacts.insert(contact.id) }
         }
+        #else
+        return HStack(spacing: 0) {
+            Button {
+                if isSelected { selectedContacts.remove(contact.id) }
+                else { selectedContacts.insert(contact.id) }
+            } label: {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 32)
+
+            Text(contact.name)
+                .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                .frame(minWidth: 140, alignment: .leading)
+
+            Text(contact.orbitZoneName)
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 100, alignment: .leading)
+
+            Text(contact.lastContactDate?.relativeDescription ?? "Never")
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 100, alignment: .leading)
+
+            Text("\(contact.activeInteractions.count)")
+                .font(OrbitTypography.caption)
+                .frame(minWidth: 80, alignment: .leading)
+
+            Text(tagDisplay)
+                .font(OrbitTypography.footnote)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .frame(minWidth: 120, alignment: .leading)
+        }
+        .padding(.horizontal, OrbitSpacing.sm)
+        .padding(.vertical, OrbitSpacing.xs)
+        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelected { selectedContacts.remove(contact.id) }
+            else { selectedContacts.insert(contact.id) }
+        }
+        #endif
     }
 
     // MARK: - Batch Actions
@@ -418,18 +310,6 @@ struct TabularView: View {
             for contact in targets {
                 contact.targetOrbit = orbit
                 contact.modifiedAt = Date()
-            }
-
-        case .addToConstellation(let constellation):
-            for contact in targets {
-                if !contact.constellations.contains(where: { $0.id == constellation.id }) {
-                    contact.constellations.append(constellation)
-                }
-            }
-
-        case .removeFromConstellation(let constellation):
-            for contact in targets {
-                contact.constellations.removeAll { $0.id == constellation.id }
             }
 
         case .archive:
@@ -450,11 +330,10 @@ struct TabularView: View {
 }
 
 // MARK: - Batch Action Types
+// "Add Tag" removed — tags are interaction-level data, not contact-level labels.
 
 enum BatchAction {
     case setOrbit(Int)
-    case addToConstellation(Constellation)
-    case removeFromConstellation(Constellation)
     case archive
     case restore
 }
@@ -465,7 +344,6 @@ struct BatchActionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let selectedCount: Int
-    let constellations: [Constellation]
     let onApply: (BatchAction) -> Void
 
     var body: some View {
@@ -478,52 +356,6 @@ struct BatchActionSheet: View {
                             dismiss()
                         } label: {
                             Label(zone.name, systemImage: "circle.dotted")
-                        }
-                    }
-                }
-
-                Section("Add to Constellation") {
-                    if constellations.isEmpty {
-                        Text("No constellations yet. Create one first.")
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(constellations) { constellation in
-                            Button {
-                                onApply(.addToConstellation(constellation))
-                                dismiss()
-                            } label: {
-                                Label {
-                                    HStack {
-                                        Text(constellation.name)
-                                        Spacer()
-                                        Text("\(constellation.contacts.count) members")
-                                            .font(OrbitTypography.footnote)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                } icon: {
-                                    Image(systemName: "star.circle")
-                                        .foregroundStyle(OrbitColors.syntaxConstellation)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !constellations.isEmpty {
-                    Section("Remove from Constellation") {
-                        ForEach(constellations) { constellation in
-                            Button {
-                                onApply(.removeFromConstellation(constellation))
-                                dismiss()
-                            } label: {
-                                Label {
-                                    Text(constellation.name)
-                                } icon: {
-                                    Image(systemName: "star.slash")
-                                        .foregroundStyle(.red)
-                                }
-                            }
                         }
                     }
                 }

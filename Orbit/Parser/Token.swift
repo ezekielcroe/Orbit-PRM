@@ -13,9 +13,9 @@ struct Token: Identifiable, Equatable {
 
     enum Kind: Equatable {
         case entity         // @Name
-        case constellation  // *GroupName (Phase 2.5)
         case impulse        // !Action
         case tag            // #Topic
+        case constellation  // *GroupName
         case artifactKey    // > key (before the operator)
         case artifactOp     // : or + or - (the artifact operator itself)
         case artifactValue  // The value after the operator
@@ -40,16 +40,6 @@ enum ParsedCommand {
         timeModifier: String?
     )
 
-    /// Log an interaction for every member of a constellation:
-    /// *Family !Call "Sunday check-in" #Weekly
-    case logConstellationInteraction(
-        constellationName: String,
-        impulse: String,
-        tags: [String],
-        note: String?,
-        timeModifier: String?
-    )
-
     /// Set a singleton artifact: @Name > key: value
     case setArtifact(contactName: String, key: String, value: String)
 
@@ -62,6 +52,21 @@ enum ParsedCommand {
     /// Delete an artifact key: @Name > key: void
     case deleteArtifact(contactName: String, key: String)
 
+    /// Add a contact to a constellation: @Name *GroupName
+    case addToConstellation(contactName: String, constellationName: String)
+
+    /// Remove a contact from a constellation: @Name *-GroupName
+    case removeFromConstellation(contactName: String, constellationName: String)
+
+    /// Log an interaction for every contact in a constellation: *GroupName !Action #tag "note"
+    case logConstellationInteraction(
+        constellationName: String,
+        impulse: String,
+        tags: [String],
+        note: String?,
+        timeModifier: String?
+    )
+
     /// Archive a contact: @Name !archive
     case archiveContact(contactName: String)
 
@@ -70,9 +75,6 @@ enum ParsedCommand {
 
     /// Search within a contact's artifacts: @Name searchquery
     case searchContact(name: String, query: String)
-
-    /// Navigate to a constellation: *Family
-    case searchConstellation(name: String)
 
     /// Undo the last action
     case undo
@@ -93,9 +95,9 @@ struct CommandSuggestion: Identifiable {
 
     enum SuggestionKind {
         case contact
-        case constellation  // Phase 2.5
         case impulse
         case tag
+        case constellation
         case artifactKey
         case command
     }

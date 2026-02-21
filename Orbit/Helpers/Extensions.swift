@@ -92,7 +92,7 @@ struct OrbitExporter {
             }
             entry["artifacts"] = artifacts
 
-            // Tags
+            // Tags (aggregated from interactions)
             entry["tags"] = contact.tagNames
 
             // Constellations

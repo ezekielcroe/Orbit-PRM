@@ -28,7 +28,7 @@ struct OrbitApp: App {
             let config = ModelConfiguration(
                 "Orbit",
                 schema: schema,
-                // CloudKit sync enabled. Requires iCloud capability in Xcode.
+                // CloudKit sync enabled.
                 // For local-only development, change to .none
                 cloudKitDatabase: .automatic
             )

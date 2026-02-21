@@ -2,9 +2,10 @@ import SwiftUI
 import SwiftData
 
 // MARK: - TagListView
-// Displays all tags and the contacts associated with each.
-// Tags are created automatically when used in the command palette (#tag),
-// but can also be managed here.
+// Shows all known tags from the tag registry, with usage stats aggregated
+// from interactions. Tags are NOT linked to contacts — they live on
+// interactions. This view answers "what tag names exist?" and
+// "which contacts have interactions with this tag?".
 
 struct TagListView: View {
     @Environment(\.modelContext) private var modelContext
@@ -12,24 +13,21 @@ struct TagListView: View {
     @Query(sort: \Tag.name)
     private var tags: [Tag]
 
-    @Query(filter: #Predicate<Contact> { !$0.isArchived })
+    @Query(filter: #Predicate<Contact> { !$0.isArchived }, sort: \Contact.name)
     private var contacts: [Contact]
 
     @State private var showAddTag = false
     @State private var newTagName = ""
     @State private var selectedTag: Tag?
 
-    /// Build a mapping of tag name → contacts that have interactions with that tag.
-    private var tagContactMap: [String: [(contact: Contact, count: Int)]] {
-        var map: [String: [(contact: Contact, count: Int)]] = [:]
-
-        for contact in contacts {
-            for tag in contact.aggregatedTags {
-                map[tag.name, default: []].append((contact: contact, count: tag.count))
-            }
+    /// For each tag, find contacts whose interactions use that tag name
+    private func contactsUsing(tag: Tag) -> [(contact: Contact, count: Int)] {
+        contacts.compactMap { contact in
+            let match = contact.aggregatedTags.first(where: { $0.name == tag.searchableName })
+            guard let match else { return nil }
+            return (contact: contact, count: match.count)
         }
-
-        return map
+        .sorted { $0.count > $1.count }
     }
 
     var body: some View {
@@ -43,8 +41,8 @@ struct TagListView: View {
             } else {
                 List(selection: $selectedTag) {
                     ForEach(tags) { tag in
-                        let contactsForTag = tagContactMap[tag.searchableName] ?? []
-                        let totalUses = contactsForTag.reduce(0) { $0 + $1.count }
+                        let usage = contactsUsing(tag: tag)
+                        let totalUses = usage.reduce(0) { $0 + $1.count }
 
                         HStack {
                             Text("#\(tag.name)")
@@ -53,8 +51,8 @@ struct TagListView: View {
 
                             Spacer()
 
-                            if !contactsForTag.isEmpty {
-                                Text("\(contactsForTag.count) contact\(contactsForTag.count == 1 ? "" : "s") · \(totalUses) use\(totalUses == 1 ? "" : "s")")
+                            if !usage.isEmpty {
+                                Text("\(usage.count) contact\(usage.count == 1 ? "" : "s") · \(totalUses) use\(totalUses == 1 ? "" : "s")")
                                     .font(OrbitTypography.caption)
                                     .foregroundStyle(.secondary)
                             } else {
@@ -104,12 +102,13 @@ struct TagListView: View {
 }
 
 // MARK: - Tag Detail Sheet
+// Shows which contacts have interactions tagged with this tag,
+// sorted by frequency.
 
 struct TagDetailSheet: View {
     let tag: Tag
     let contacts: [Contact]
 
-    /// Contacts that have interactions tagged with this tag, sorted by frequency
     private var taggedContacts: [(contact: Contact, count: Int)] {
         contacts.compactMap { contact in
             let match = contact.aggregatedTags.first(where: { $0.name == tag.searchableName })

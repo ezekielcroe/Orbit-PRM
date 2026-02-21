@@ -1,7 +1,15 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - ContactDetailView (Phase 2)
+// MARK: - ContactDetailView (Refactored)
+// Single continuous scroll replaces the previous Info/Timeline tab picker.
+// The full picture of a contact is visible in one flow:
+//   1. Header (name, orbit, tags, last contact)
+//   2. Quick action buttons
+//   3. Artifacts grouped by category
+//   4. Recent interactions (last 5 inline)
+//   5. "Show all" expands full timeline with search/filter
+//
 
 struct ContactDetailView: View {
     @Environment(\.modelContext) private var modelContext
@@ -12,75 +20,13 @@ struct ContactDetailView: View {
     @State private var showAddArtifact = false
     @State private var showAddInteraction = false
     @State private var editingArtifact: Artifact?
-    @State private var interactionLimit = 20
+    @State private var showFullTimeline = false
 
-    @State private var selectedTab: DetailTab = .info
-
+    // Timeline filter state
     @State private var impulseFilter: String?
     @State private var interactionSearch = ""
     @State private var expandedMonths: Set<String> = []
-
-    enum DetailTab: String, CaseIterable {
-        case info = "Info"
-        case timeline = "Timeline"
-
-        var icon: String {
-            switch self {
-            case .info: return "person.text.rectangle"
-            case .timeline: return "clock"
-            }
-        }
-    }
-
-    // MARK: - Data
-
-    private var activeInteractions: [Interaction] {
-        contact.interactions
-            .filter { !$0.isDeleted }
-            .sorted { $0.date > $1.date }
-    }
-
-    private var filteredInteractions: [Interaction] {
-        var result = activeInteractions
-
-        if let filter = impulseFilter {
-            result = result.filter { $0.impulse.lowercased() == filter.lowercased() }
-        }
-
-        if !interactionSearch.isEmpty {
-            let query = interactionSearch.lowercased()
-            result = result.filter {
-                $0.impulse.lowercased().contains(query)
-                || $0.content.lowercased().contains(query)
-                || $0.tagNames.lowercased().contains(query)
-            }
-        }
-
-        return result
-    }
-
-    private var uniqueImpulses: [String] {
-        let impulses = activeInteractions.map(\.impulse)
-        var seen = Set<String>()
-        return impulses.filter { seen.insert($0.lowercased()).inserted }
-            .sorted()
-    }
-
-    private var groupedInteractions: [(key: String, interactions: [Interaction])] {
-        let limited = Array(filteredInteractions.prefix(interactionLimit))
-
-        let grouped = Dictionary(grouping: limited) { interaction in
-            interaction.date.formatted(.dateTime.year().month(.wide))
-        }
-
-        return grouped
-            .map { (key: $0.key, interactions: $0.value) }
-            .sorted { a, b in
-                let aDate = a.interactions.first?.date ?? .distantPast
-                let bDate = b.interactions.first?.date ?? .distantPast
-                return aDate > bDate
-            }
-    }
+    @State private var interactionLimit = 20
 
     // MARK: - Artifact Categories
 
@@ -123,45 +69,65 @@ struct ContactDetailView: View {
     private var groupedArtifacts: [(category: ArtifactCategory, artifacts: [Artifact])] {
         let sorted = contact.artifacts.sorted { $0.key < $1.key }
         let grouped = Dictionary(grouping: sorted) { ArtifactCategory.category(for: $0.key) }
-
         return ArtifactCategory.allCases.compactMap { category in
             guard let arts = grouped[category], !arts.isEmpty else { return nil }
             return (category: category, artifacts: arts)
         }
     }
 
+    // MARK: - Interaction Data
+
+    private var filteredInteractions: [Interaction] {
+        var result = contact.activeInteractions
+        if let filter = impulseFilter {
+            result = result.filter { $0.impulse.lowercased() == filter.lowercased() }
+        }
+        if !interactionSearch.isEmpty {
+            let query = interactionSearch.lowercased()
+            result = result.filter {
+                $0.impulse.lowercased().contains(query)
+                || $0.content.lowercased().contains(query)
+                || $0.tagNames.lowercased().contains(query)
+            }
+        }
+        return result
+    }
+
+    private var uniqueImpulses: [String] {
+        let impulses = contact.activeInteractions.map(\.impulse)
+        var seen = Set<String>()
+        return impulses.filter { seen.insert($0.lowercased()).inserted }.sorted()
+    }
+
+    private var groupedInteractions: [(key: String, interactions: [Interaction])] {
+        let limited = Array(filteredInteractions.prefix(interactionLimit))
+        let grouped = Dictionary(grouping: limited) { interaction in
+            interaction.date.formatted(.dateTime.year().month(.wide))
+        }
+        return grouped
+            .map { (key: $0.key, interactions: $0.value) }
+            .sorted { a, b in
+                let aDate = a.interactions.first?.date ?? .distantPast
+                let bDate = b.interactions.first?.date ?? .distantPast
+                return aDate > bDate
+            }
+    }
+
     // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
-                    headerSection
-                    quickActionsBar
+        ScrollView {
+            VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
+                headerSection
+                quickActionsBar
+
+                if !contact.artifacts.isEmpty {
+                    artifactSection
                 }
-                .padding(.horizontal, OrbitSpacing.lg)
-                .padding(.top, OrbitSpacing.lg)
-            }
-            .frame(maxHeight: 180)
 
-            Picker("Section", selection: $selectedTab) {
-                ForEach(DetailTab.allCases, id: \.self) { tab in
-                    Label(tab.rawValue, systemImage: tab.icon)
-                        .tag(tab)
-                }
+                interactionSection
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.vertical, OrbitSpacing.sm)
-
-            Divider()
-
-            switch selectedTab {
-            case .info:
-                infoTabContent
-            case .timeline:
-                timelineTabContent
-            }
+            .padding(OrbitSpacing.lg)
         }
         .navigationTitle(contact.name)
         .toolbar {
@@ -184,7 +150,6 @@ struct ContactDetailView: View {
                     Button(contact.isArchived ? "Restore" : "Archive", systemImage: "archivebox") {
                         contact.isArchived.toggle()
                         contact.modifiedAt = Date()
-
                         if contact.isArchived {
                             spotlightIndexer.deindex(contact: contact)
                         } else {
@@ -227,27 +192,24 @@ struct ContactDetailView: View {
                     .font(OrbitTypography.captionMedium)
                     .foregroundStyle(.secondary)
 
-                if let days = contact.daysSinceLastContact {
-                    Label(
-                        days == 0 ? "Today" : "\(days)d ago",
-                        systemImage: "clock"
-                    )
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.secondary)
+                if contact.daysSinceLastContact != nil {
+                    Label(contact.recencyDescription, systemImage: "clock")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(contact.isDrifting ? contact.driftColor : .secondary)
                 }
 
                 Text("·")
                     .foregroundStyle(.tertiary)
 
-                Text("\(activeInteractions.count) interaction\(activeInteractions.count == 1 ? "" : "s")")
+                Text("\(contact.activeInteractions.count) interaction\(contact.activeInteractions.count == 1 ? "" : "s")")
                     .font(OrbitTypography.caption)
                     .foregroundStyle(.tertiary)
             }
 
-            // Phase 2.5: Aggregated tags from interactions with counts
+            // Aggregated interaction tags — what you do with this person
             if !contact.aggregatedTags.isEmpty {
                 FlowLayout(spacing: OrbitSpacing.sm) {
-                    ForEach(contact.aggregatedTags, id: \.name) { tag in
+                    ForEach(contact.aggregatedTags.prefix(8)) { tag in
                         HStack(spacing: 2) {
                             Text("#\(tag.name)")
                                 .font(OrbitTypography.caption)
@@ -262,17 +224,13 @@ struct ContactDetailView: View {
                 }
             }
 
-            // Constellation membership
+            // Constellations
             if !contact.constellations.isEmpty {
                 FlowLayout(spacing: OrbitSpacing.sm) {
                     ForEach(contact.constellations) { constellation in
-                        HStack(spacing: 2) {
-                            Image(systemName: "star.circle.fill")
-                                .font(.system(size: 9))
-                            Text(constellation.name)
-                                .font(OrbitTypography.caption)
-                        }
-                        .foregroundStyle(OrbitColors.syntaxConstellation)
+                        Text("✦ \(constellation.name)")
+                            .font(OrbitTypography.caption)
+                            .foregroundStyle(.purple)
                     }
                 }
             }
@@ -286,26 +244,16 @@ struct ContactDetailView: View {
         }
     }
 
-    // MARK: - Quick Actions Bar
+    // MARK: - Quick Actions
 
     private var quickActionsBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: OrbitSpacing.sm) {
-                quickActionButton("Call", icon: "phone") {
-                    quickLog(impulse: "Call")
-                }
-                quickActionButton("Text", icon: "message") {
-                    quickLog(impulse: "Text")
-                }
-                quickActionButton("Coffee", icon: "cup.and.saucer") {
-                    quickLog(impulse: "Coffee")
-                }
-                quickActionButton("Meeting", icon: "person.2") {
-                    quickLog(impulse: "Meeting")
-                }
-                quickActionButton("Other…", icon: "plus.bubble") {
-                    showAddInteraction = true
-                }
+                quickActionButton("Call", icon: "phone") { quickLog(impulse: "Call") }
+                quickActionButton("Text", icon: "message") { quickLog(impulse: "Text") }
+                quickActionButton("Coffee", icon: "cup.and.saucer") { quickLog(impulse: "Coffee") }
+                quickActionButton("Meeting", icon: "person.2") { quickLog(impulse: "Meeting") }
+                quickActionButton("Other…", icon: "plus.bubble") { showAddInteraction = true }
             }
         }
     }
@@ -327,18 +275,7 @@ struct ContactDetailView: View {
         spotlightIndexer.index(contact: contact)
     }
 
-    // MARK: - Info Tab
-
-    private var infoTabContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
-                artifactSection
-            }
-            .padding(OrbitSpacing.lg)
-        }
-    }
-
-    // MARK: - Artifacts (Grouped)
+    // MARK: - Artifacts
 
     private var artifactSection: some View {
         VStack(alignment: .leading, spacing: OrbitSpacing.md) {
@@ -347,26 +284,15 @@ struct ContactDetailView: View {
                     .font(OrbitTypography.captionMedium)
                     .tracking(1.5)
                     .foregroundStyle(.secondary)
-
                 Spacer()
-
-                Button {
-                    showAddArtifact = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.caption)
+                Button { showAddArtifact = true } label: {
+                    Image(systemName: "plus").font(.caption)
                 }
                 .buttonStyle(.plain)
             }
 
-            if contact.artifacts.isEmpty {
-                Text("No artifacts yet. Use > key: value to add context.")
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(groupedArtifacts, id: \.category) { group in
-                    artifactCategorySection(group.category, artifacts: group.artifacts)
-                }
+            ForEach(groupedArtifacts, id: \.category) { group in
+                artifactCategorySection(group.category, artifacts: group.artifacts)
             }
         }
     }
@@ -387,13 +313,9 @@ struct ContactDetailView: View {
             ForEach(artifacts) { artifact in
                 ArtifactRowView(artifact: artifact)
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        editingArtifact = artifact
-                    }
+                    .onTapGesture { editingArtifact = artifact }
                     .contextMenu {
-                        Button("Edit", systemImage: "pencil") {
-                            editingArtifact = artifact
-                        }
+                        Button("Edit", systemImage: "pencil") { editingArtifact = artifact }
                         Button("Delete", systemImage: "trash", role: .destructive) {
                             modelContext.delete(artifact)
                             contact.modifiedAt = Date()
@@ -404,41 +326,85 @@ struct ContactDetailView: View {
         }
     }
 
-    // MARK: - Timeline Tab
+    // MARK: - Interactions
 
-    private var timelineTabContent: some View {
-        VStack(spacing: 0) {
-            interactionFilterBar
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                    interactionSection
+    private var interactionSection: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+            HStack {
+                Text("INTERACTIONS")
+                    .font(OrbitTypography.captionMedium)
+                    .tracking(1.5)
+                    .foregroundStyle(.secondary)
+                if !contact.activeInteractions.isEmpty {
+                    Text("(\(contact.activeInteractions.count))")
+                        .font(OrbitTypography.footnote)
+                        .foregroundStyle(.tertiary)
                 }
-                .padding(OrbitSpacing.lg)
+                Spacer()
+                Button { showAddInteraction = true } label: {
+                    Image(systemName: "plus").font(.caption)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if contact.activeInteractions.isEmpty {
+                Text("No interactions logged yet.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.tertiary)
+            } else if !showFullTimeline {
+                recentInteractionsPreview
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showFullTimeline = true }
+                } label: {
+                    Text("Show all \(contact.activeInteractions.count) interactions →")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, OrbitSpacing.xs)
+            } else {
+                fullTimeline
             }
         }
     }
 
-    // MARK: - Interaction Filters
+    private var recentInteractionsPreview: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            ForEach(contact.activeInteractions.prefix(5)) { interaction in
+                InteractionRowView(interaction: interaction)
+                    .contextMenu {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            interaction.isDeleted = true
+                            contact.refreshLastContactDate()
+                        }
+                    }
+            }
+        }
+    }
 
-    private var interactionFilterBar: some View {
-        VStack(spacing: OrbitSpacing.sm) {
-            HStack(spacing: OrbitSpacing.sm) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                TextField("Search interactions…", text: $interactionSearch)
+    private var fullTimeline: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showFullTimeline = false
+                    impulseFilter = nil
+                    interactionSearch = ""
+                }
+            } label: {
+                Text("← Show recent only")
                     .font(OrbitTypography.caption)
-                    .textFieldStyle(.plain)
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
 
+            // Search
+            HStack(spacing: OrbitSpacing.sm) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                TextField("Search interactions…", text: $interactionSearch)
+                    .font(OrbitTypography.caption).textFieldStyle(.plain)
                 if !interactionSearch.isEmpty {
-                    Button {
-                        interactionSearch = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
+                    Button { interactionSearch = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.caption)
                     }
                     .buttonStyle(.plain)
                 }
@@ -450,28 +416,44 @@ struct ContactDetailView: View {
             if uniqueImpulses.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: OrbitSpacing.xs) {
-                        filterChip("All", isActive: impulseFilter == nil) {
-                            impulseFilter = nil
-                        }
+                        impulseChip("All", isActive: impulseFilter == nil) { impulseFilter = nil }
                         ForEach(uniqueImpulses, id: \.self) { impulse in
-                            filterChip(impulse, isActive: impulseFilter?.lowercased() == impulse.lowercased()) {
+                            impulseChip(impulse, isActive: impulseFilter?.lowercased() == impulse.lowercased()) {
                                 impulseFilter = (impulseFilter?.lowercased() == impulse.lowercased()) ? nil : impulse
                             }
                         }
                     }
                 }
             }
+
+            if filteredInteractions.count != contact.activeInteractions.count {
+                Text("\(filteredInteractions.count) of \(contact.activeInteractions.count) interactions")
+                    .font(OrbitTypography.footnote).foregroundStyle(.tertiary)
+            }
+
+            if filteredInteractions.isEmpty {
+                Text("No interactions match your filters.")
+                    .font(OrbitTypography.caption).foregroundStyle(.tertiary)
+            } else {
+                ForEach(Array(groupedInteractions.enumerated()), id: \.element.key) { index, group in
+                    collapsibleMonthGroup(group, isRecentGroup: index < 2)
+                }
+                if filteredInteractions.count > interactionLimit {
+                    Button { interactionLimit += 20 } label: {
+                        Text("Show more (\(filteredInteractions.count - interactionLimit) remaining)")
+                            .font(OrbitTypography.caption).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain).padding(.top, OrbitSpacing.sm)
+                }
+            }
         }
-        .padding(.horizontal, OrbitSpacing.lg)
-        .padding(.vertical, OrbitSpacing.sm)
     }
 
-    private func filterChip(_ label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+    private func impulseChip(_ label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(OrbitTypography.footnote)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10).padding(.vertical, 4)
                 .background(
                     isActive ? OrbitColors.syntaxImpulse.opacity(0.15) : Color.secondary.opacity(0.08),
                     in: Capsule()
@@ -481,100 +463,28 @@ struct ContactDetailView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Interactions (Grouped + Collapsible + Lazy)
-
-    private var interactionSection: some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-            HStack {
-                Text("INTERACTIONS")
-                    .font(OrbitTypography.captionMedium)
-                    .tracking(1.5)
-                    .foregroundStyle(.secondary)
-
-                if filteredInteractions.count != activeInteractions.count {
-                    Text("(\(filteredInteractions.count) of \(activeInteractions.count))")
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
-                }
-
-                Spacer()
-
-                Button {
-                    showAddInteraction = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if filteredInteractions.isEmpty {
-                if activeInteractions.isEmpty {
-                    Text("No interactions logged yet.")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text("No interactions match your filters.")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            } else {
-                ForEach(Array(groupedInteractions.enumerated()), id: \.element.key) { index, group in
-                    collapsibleMonthGroup(group, isRecentGroup: index < 2)
-                }
-
-                if filteredInteractions.count > interactionLimit {
-                    Button {
-                        interactionLimit += 20
-                    } label: {
-                        Text("Show more (\(filteredInteractions.count - interactionLimit) remaining)")
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, OrbitSpacing.sm)
-                }
-            }
-        }
-    }
-
     private func collapsibleMonthGroup(
         _ group: (key: String, interactions: [Interaction]),
         isRecentGroup: Bool
     ) -> some View {
         let isExpanded = expandedMonths.contains(group.key)
-
         return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    if isExpanded {
-                        expandedMonths.remove(group.key)
-                    } else {
-                        expandedMonths.insert(group.key)
-                    }
+                    if isExpanded { expandedMonths.remove(group.key) }
+                    else { expandedMonths.insert(group.key) }
                 }
             } label: {
                 HStack(spacing: OrbitSpacing.sm) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12)
-
-                    Text(group.key)
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
-                        .textCase(.uppercase)
-                        .tracking(1)
-
-                    Text("(\(group.interactions.count))")
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.quaternary)
-
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary).frame(width: 12)
+                    Text(group.key).font(OrbitTypography.footnote).foregroundStyle(.tertiary)
+                        .textCase(.uppercase).tracking(1)
+                    Text("(\(group.interactions.count))").font(OrbitTypography.footnote).foregroundStyle(.quaternary)
                     Spacer()
                 }
             }
-            .buttonStyle(.plain)
-            .padding(.top, OrbitSpacing.sm)
+            .buttonStyle(.plain).padding(.top, OrbitSpacing.sm)
 
             if isExpanded {
                 ForEach(group.interactions) { interaction in

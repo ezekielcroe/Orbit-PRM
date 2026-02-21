@@ -14,6 +14,7 @@ struct ConstellationListView: View {
 
     @State private var showAddSheet = false
     @State private var selectedConstellation: Constellation?
+    @State private var constellationToEdit: Constellation?
 
     var body: some View {
         Group {
@@ -45,7 +46,13 @@ struct ConstellationListView: View {
                         .swipeActions(edge: .trailing) {
                             Button("Delete", role: .destructive) {
                                 modelContext.delete(constellation)
+                                try? modelContext.save()
                             }
+                            
+                            Button("Edit") {
+                                constellationToEdit = constellation
+                            }
+                            .tint(.blue)
                         }
                     }
                 }
@@ -61,11 +68,23 @@ struct ConstellationListView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAddSheet) {
-            ConstellationFormSheet()
+        .background {
+            Color.clear
+                .sheet(isPresented: $showAddSheet) {
+                    ConstellationFormSheet()
+                }
         }
-        .sheet(item: $selectedConstellation) { constellation in
-            ConstellationDetailSheet(constellation: constellation)
+        .background {
+            Color.clear
+                .sheet(item: $selectedConstellation) { constellation in
+                    ConstellationDetailSheet(constellation: constellation)
+                }
+        }
+        .background {
+            Color.clear
+                .sheet(item: $constellationToEdit) { constellation in
+                    ConstellationFormSheet(editingConstellation: constellation)
+                }
         }
     }
 }
@@ -76,8 +95,23 @@ struct ConstellationFormSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
-    @State private var name = ""
-    @State private var notes = ""
+    @State private var name: String
+    @State private var notes: String
+    
+    // 1. Hold the constellation being edited
+    var editingConstellation: Constellation?
+
+    // 2. Custom initializer to set up state based on the mode
+    init(editingConstellation: Constellation? = nil) {
+        self.editingConstellation = editingConstellation
+        if let constellation = editingConstellation {
+            _name = State(initialValue: constellation.name)
+            _notes = State(initialValue: constellation.notes)
+        } else {
+            _name = State(initialValue: "")
+            _notes = State(initialValue: "")
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -86,7 +120,8 @@ struct ConstellationFormSheet: View {
                 TextField("Notes (optional)", text: $notes, axis: .vertical)
                     .lineLimit(2...4)
             }
-            .navigationTitle("New Constellation")
+            // 3. Dynamic title
+            .navigationTitle(editingConstellation == nil ? "New Constellation" : "Edit Constellation")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -95,10 +130,19 @@ struct ConstellationFormSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        let constellation = Constellation(name: name, notes: notes)
-                        modelContext.insert(constellation)
-                        dismiss()
+                    // 4. Dynamic button and save logic
+                    Button(editingConstellation == nil ? "Create" : "Save") {
+                        if let constellation = editingConstellation {
+                            // Edit existing
+                            constellation.name = name
+                            constellation.notes = notes
+                        } else {
+                            // Create new
+                            let constellation = Constellation(name: name, notes: notes)
+                            modelContext.insert(constellation)
+                        }
+                        
+                        try? modelContext.save()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }

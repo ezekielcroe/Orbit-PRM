@@ -9,8 +9,6 @@ import Contacts
 // Accessible from the sidebar. Emphasizes data ownership — export and
 // import are first-class citizens, not buried in submenus.
 //
-// FIX 2: macOS uses a TabView for native Settings-window appearance.
-// FIX 3: Import uses a two-step preview flow with contact selection.
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -36,6 +34,12 @@ struct SettingsView: View {
     @State private var showImportPreview = false
     @State private var importableContacts: [ImportableContact] = []
     @State private var isFetchingContacts = false
+
+    // Tag/Constellation management
+    @State private var showAddTag = false
+    @State private var newTagName = ""
+    @State private var showAddConstellation = false
+    @State private var selectedConstellation: Constellation?
 
     #if os(iOS)
     @State private var showShareSheet = false
@@ -97,24 +101,34 @@ struct SettingsView: View {
             .tag(0)
 
             Form {
+                tagRegistrySection
+                constellationManagementSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Organize", systemImage: "tag") }
+            .tag(1)
+
+            Form {
                 exportSection
                 importSection
             }
             .formStyle(.grouped)
             .tabItem { Label("Data", systemImage: "externaldrive") }
-            .tag(1)
+            .tag(2)
 
             Form {
                 dataManagementSection
             }
             .formStyle(.grouped)
             .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
-            .tag(2)
+            .tag(3)
         }
         .frame(minWidth: 480)
         #else
         Form {
             dataOverviewSection
+            tagRegistrySection
+            constellationManagementSection
             exportSection
             importSection
             dataManagementSection
@@ -138,6 +152,124 @@ struct SettingsView: View {
             Text("Your Data")
         } footer: {
             Text("All data is stored locally on your device and synced via your personal iCloud account. Orbit never sends your data to external servers.")
+        }
+    }
+
+    // MARK: - Tag Registry
+    // Tags are interaction-level data, not contact labels.
+    // This section manages the tag name registry used for autocomplete
+    // in the command palette.
+
+    private var tagRegistrySection: some View {
+        Section {
+            if allTags.isEmpty {
+                Text("No tags yet. Tags are created when you use #tag in the command palette.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(allTags) { tag in
+                    HStack {
+                        Text("#\(tag.name)")
+                            .font(OrbitTypography.bodyMedium)
+                            .foregroundStyle(OrbitColors.syntaxTag)
+
+                        Spacer()
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", role: .destructive) {
+                            modelContext.delete(tag)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                showAddTag = true
+            } label: {
+                Label("Add Tag", systemImage: "plus")
+            }
+        } header: {
+            Text("Tag Registry")
+        } footer: {
+            Text("Tags appear as autocomplete suggestions in the command palette. They are stored on interactions, not contacts — use Constellations to group people.")
+        }
+        .alert("New Tag", isPresented: $showAddTag) {
+            TextField("Tag name", text: $newTagName)
+            Button("Create") {
+                let trimmed = newTagName.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty {
+                    let tag = Tag(name: trimmed)
+                    modelContext.insert(tag)
+                    newTagName = ""
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                newTagName = ""
+            }
+        }
+    }
+
+    // MARK: - Constellation Management
+
+    private var constellationManagementSection: some View {
+        Section {
+            if allConstellations.isEmpty {
+                Text("No constellations yet. Group related contacts into constellations.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(allConstellations) { constellation in
+                    Button {
+                        selectedConstellation = constellation
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(constellation.name)
+                                    .font(OrbitTypography.bodyMedium)
+                                    .foregroundStyle(.primary)
+
+                                if !constellation.notes.isEmpty {
+                                    Text(constellation.notes)
+                                        .font(OrbitTypography.footnote)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer()
+
+                            Text("\(constellation.contacts.count)")
+                                .font(OrbitTypography.caption)
+                                .foregroundStyle(.secondary)
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                        }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", role: .destructive) {
+                            modelContext.delete(constellation)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                showAddConstellation = true
+            } label: {
+                Label("Add Constellation", systemImage: "plus")
+            }
+        } header: {
+            Text("Constellations")
+        } footer: {
+            Text("Constellations group related contacts — use them to label who people are to you. Tap a constellation to manage its members.")
+        }
+        .sheet(isPresented: $showAddConstellation) {
+            ConstellationFormSheet()
+        }
+        .sheet(item: $selectedConstellation) { constellation in
+            ConstellationDetailSheet(constellation: constellation)
         }
     }
 

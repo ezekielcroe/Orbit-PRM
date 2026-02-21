@@ -36,11 +36,6 @@ final class CommandParser {
                 tokens.append(token)
                 current = token.range.upperBound
 
-            case "*":
-                let token = readPrefixedToken(input: input, from: current, kind: .constellation)
-                tokens.append(token)
-                current = token.range.upperBound
-
             case "!":
                 let token = readPrefixedToken(input: input, from: current, kind: .impulse)
                 tokens.append(token)
@@ -63,6 +58,11 @@ final class CommandParser {
 
             case "^":
                 let token = readPrefixedToken(input: input, from: current, kind: .timeModifier)
+                tokens.append(token)
+                current = token.range.upperBound
+
+            case "*":
+                let token = readConstellationToken(input: input, from: current)
                 tokens.append(token)
                 current = token.range.upperBound
 
@@ -100,14 +100,35 @@ final class CommandParser {
 
         let tokens = tokenize(trimmed)
 
-        // Check for constellation command first (*Group)
-        if let constellationToken = tokens.first(where: { $0.kind == .constellation }) {
-            return parseConstellationCommand(constellationName: constellationToken.value, tokens: tokens)
+        // Constellation-first command: *GroupName !Action #tag "note" ^time
+        // No @contact required — logs interaction for all members of the constellation.
+        let hasEntity = tokens.contains(where: { $0.kind == .entity })
+        if !hasEntity, let constellationToken = tokens.first(where: { $0.kind == .constellation }) {
+            let constellationName = constellationToken.value
+            if constellationName.isEmpty || constellationName.hasPrefix("-") {
+                return .invalid(reason: "Constellation name required after *")
+            }
+
+            if let impulseToken = tokens.first(where: { $0.kind == .impulse }) {
+                let tags = tokens.filter { $0.kind == .tag }.map(\.value)
+                let note = tokens.first(where: { $0.kind == .quotedText })?.value
+                let timeMod = tokens.first(where: { $0.kind == .timeModifier })?.value
+
+                return .logConstellationInteraction(
+                    constellationName: constellationName,
+                    impulse: impulseToken.value,
+                    tags: tags,
+                    note: note,
+                    timeModifier: timeMod
+                )
+            }
+
+            return .invalid(reason: "Constellation command needs an action: *\(constellationName) !Action")
         }
 
-        // Must have an entity for contact-level commands
+        // Must start with an entity
         guard let entityToken = tokens.first(where: { $0.kind == .entity }) else {
-            return .invalid(reason: "Command must begin with @ContactName or *Constellation")
+            return .invalid(reason: "Command must begin with @ContactName")
         }
 
         let contactName = entityToken.value
@@ -119,6 +140,23 @@ final class CommandParser {
             }
             if impulseToken.value.lowercased() == "restore" {
                 return .restoreContact(contactName: contactName)
+            }
+        }
+
+        // Check for constellation operations: *GroupName or *-GroupName
+        if let constellationToken = tokens.first(where: { $0.kind == .constellation }) {
+            let value = constellationToken.value
+            if value.hasPrefix("-") {
+                let name = String(value.dropFirst()).trimmingCharacters(in: .whitespaces)
+                if name.isEmpty {
+                    return .invalid(reason: "Constellation name required after *-")
+                }
+                return .removeFromConstellation(contactName: contactName, constellationName: name)
+            } else {
+                if value.isEmpty {
+                    return .invalid(reason: "Constellation name required after *")
+                }
+                return .addToConstellation(contactName: contactName, constellationName: value)
             }
         }
 
@@ -156,31 +194,9 @@ final class CommandParser {
         return .searchContact(name: contactName, query: "")
     }
 
-    // MARK: - Constellation Command Resolution
-
-    private func parseConstellationCommand(constellationName: String, tokens: [Token]) -> ParsedCommand {
-        // If there's an impulse, it's a constellation interaction
-        if let impulseToken = tokens.first(where: { $0.kind == .impulse }) {
-            let tags = tokens.filter { $0.kind == .tag }.map(\.value)
-            let note = tokens.first(where: { $0.kind == .quotedText })?.value
-            let timeMod = tokens.first(where: { $0.kind == .timeModifier })?.value
-
-            return .logConstellationInteraction(
-                constellationName: constellationName,
-                impulse: impulseToken.value,
-                tags: tags,
-                note: note,
-                timeModifier: timeMod
-            )
-        }
-
-        // Bare *ConstellationName — navigate to it
-        return .searchConstellation(name: constellationName)
-    }
-
     // MARK: - Private Tokenizer Helpers
 
-    /// Read a prefixed token (@Name, *Group, !Action, #Tag, ^yesterday)
+    /// Read a prefixed token (@Name, !Action, #Tag, ^yesterday)
     /// Accumulates characters after the prefix until whitespace or another operator.
     private func readPrefixedToken(input: String, from start: String.Index, kind: Token.Kind) -> Token {
         // Skip the operator character itself
@@ -237,6 +253,25 @@ final class CommandParser {
 
         let value = String(input[start..<current])
         return Token(kind: .text, value: value, range: start..<current)
+    }
+
+    /// Read a constellation token: *GroupName or *-GroupName
+    /// The value includes the "-" prefix if present (for remove operations).
+    private func readConstellationToken(input: String, from start: String.Index) -> Token {
+        var current = input.index(after: start) // Skip *
+        let end = input.endIndex
+
+        while current < end {
+            let char = input[current]
+            if char == " " || char == "\t" || isOperator(char) {
+                break
+            }
+            current = input.index(after: current)
+        }
+
+        let valueStart = input.index(after: start)
+        let value = String(input[valueStart..<current])
+        return Token(kind: .constellation, value: value, range: start..<current)
     }
 
     /// Parse an artifact expression: > key: value, > key + value, > key - value
@@ -304,7 +339,7 @@ final class CommandParser {
 
     /// Check if a character is one of Orbit's command operators
     private func isOperator(_ char: Character) -> Bool {
-        return char == "@" || char == "*" || char == "!" || char == "#" || char == ">" || char == "^"
+        return char == "@" || char == "!" || char == "#" || char == ">" || char == "^" || char == "*"
     }
 
     /// Advance past whitespace characters
