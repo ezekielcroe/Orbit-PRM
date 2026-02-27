@@ -30,7 +30,7 @@ final class SpotlightIndexer {
         // Keywords from aggregated interaction tags and artifact values
         var keywords = contact.tagNames
         keywords.append(contact.orbitZoneName)
-        for artifact in contact.artifacts {
+        for artifact in contact.artifacts ?? [] {
             keywords.append(artifact.key)
             if !artifact.isArray {
                 keywords.append(artifact.value)
@@ -94,7 +94,7 @@ final class SpotlightIndexer {
 
                 var keywords = contact.tagNames
                 keywords.append(contact.orbitZoneName)
-                keywords.append(contentsOf: contact.constellations.map(\.name))
+                keywords.append(contentsOf: (contact.constellations ?? []).map(\.name))
                 attributeSet.keywords = keywords
 
                 let item = CSSearchableItem(
@@ -146,20 +146,20 @@ final class SpotlightIndexer {
         }
 
         // Constellations
-        let constellationDisplay = contact.constellations.prefix(2).map(\.name).joined(separator: ", ")
-        if !constellationDisplay.isEmpty {
-            parts.append("★ \(constellationDisplay)")
+        let constellationDisplay = contact.constellations?.prefix(2).map(\.name).joined(separator: ", ")
+        if ((constellationDisplay?.isEmpty) == nil) {
+            parts.append("★ \(String(describing: constellationDisplay))")
         }
 
         // Add key artifacts for context
-        let keyArtifacts = contact.artifacts
+        let keyArtifacts = contact.artifacts?
             .filter { ["company", "city", "role", "spouse"].contains($0.searchableKey) }
             .prefix(2)
             .map { "\($0.key): \($0.value)" }
             .joined(separator: " · ")
 
-        if !keyArtifacts.isEmpty {
-            parts.append(keyArtifacts)
+        if let artifactsString = keyArtifacts, !artifactsString.isEmpty {
+            parts.append(artifactsString)
         }
 
         return parts.joined(separator: " · ")

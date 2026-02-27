@@ -169,7 +169,7 @@ struct ContactDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if !contact.aggregatedTags.isEmpty || !contact.constellations.isEmpty {
+                if !contact.aggregatedTags.isEmpty || !(contact.constellations ?? []).isEmpty {
                     FlowLayout(spacing: OrbitSpacing.sm) {
                         ForEach(contact.aggregatedTags.prefix(8)) { tag in
                             Text("#\(tag.name)")
@@ -178,7 +178,7 @@ struct ContactDetailView: View {
                                 .padding(.horizontal, 8).padding(.vertical, 4)
                                 .background(OrbitColors.syntaxTag.opacity(0.1), in: Capsule())
                         }
-                        ForEach(contact.constellations) { constellation in
+                        ForEach(contact.constellations ?? []) { constellation in
                             Text("✦ \(constellation.name)")
                                 .font(OrbitTypography.caption)
                                 .foregroundStyle(.purple)
@@ -205,7 +205,7 @@ struct ContactDetailView: View {
                     .buttonStyle(.plain)
                 }
 
-                if contact.artifacts.isEmpty {
+                if (contact.artifacts ?? []).isEmpty {
                     Text("No artifacts saved yet.")
                         .font(OrbitTypography.caption)
                         .foregroundStyle(.tertiary)
@@ -435,7 +435,7 @@ struct ContactDetailView: View {
     }
 
     private var groupedArtifacts: [(category: ArtifactCategory, artifacts: [Artifact])] {
-        let sorted = contact.artifacts.sorted { $0.key < $1.key }
+        let sorted = (contact.artifacts ?? []).sorted { $0.key < $1.key }
         let grouped = Dictionary(grouping: sorted) { ArtifactCategory.category(for: $0) }
         return ArtifactCategory.allCases.compactMap { category in
             guard let arts = grouped[category], !arts.isEmpty else { return nil }

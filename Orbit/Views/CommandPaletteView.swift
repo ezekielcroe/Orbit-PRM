@@ -427,7 +427,7 @@ struct CommandPaletteView: View {
             if let entityToken = tokens.first(where: { $0.kind == .entity }),
                let contact = executor.findContact(named: entityToken.value, in: modelContext) {
                 let prefix = lastToken.value.lowercased()
-                let existingKeys = contact.artifacts.map(\.key)
+                let existingKeys = (contact.artifacts ?? []).map(\.key)
                 suggestions = existingKeys
                     .filter { $0.lowercased().hasPrefix(prefix) || prefix.isEmpty }
                     .map { key in

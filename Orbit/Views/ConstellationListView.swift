@@ -30,13 +30,13 @@ struct ConstellationListView: View {
                         ConstellationRowView(constellation: constellation)
                             .tag(constellation)
                             .swipeActions(edge: .trailing) {
+                                Button("Edit") {
+                                    constellationToEdit = constellation
+                                }
+                                
                                 Button("Delete", role: .destructive) {
                                     modelContext.delete(constellation)
                                     try? modelContext.save()
-                                }
-                                
-                                Button("Edit") {
-                                    constellationToEdit = constellation
                                 }
                                 .tint(.blue)
                             }
@@ -69,13 +69,13 @@ struct ConstellationListView: View {
     }
 }
 
-// MARK: - Constellation Row (Fix 4: Shows aggregate stats)
+// MARK: - Constellation Row
 
 struct ConstellationRowView: View {
     let constellation: Constellation
 
     private var activeMembers: [Contact] {
-        constellation.contacts.filter { !$0.isArchived }
+        (constellation.contacts ?? []).filter { !$0.isArchived }
     }
 
     private var driftingCount: Int {

@@ -78,7 +78,7 @@ struct OrbitExporter {
 
             // Artifacts as structured key-value pairs
             var artifacts: [[String: Any]] = []
-            for artifact in contact.artifacts {
+            for artifact in contact.artifacts ?? [] {
                 var artifactEntry: [String: Any] = [
                     "key": artifact.key,
                     "isArray": artifact.isArray,
@@ -96,10 +96,10 @@ struct OrbitExporter {
             entry["tags"] = contact.tagNames
 
             // Constellations
-            entry["constellations"] = contact.constellations.map(\.name)
+            entry["constellations"] = contact.constellations?.map(\.name) ?? []
 
             // Interactions (only non-deleted)
-            let interactions = contact.interactions
+            let interactions = contact.interactions?
                 .filter { !$0.isDeleted }
                 .sorted { $0.date > $1.date }
                 .map { interaction -> [String: Any] in
@@ -116,7 +116,7 @@ struct OrbitExporter {
                     return interactionEntry
                 }
             entry["interactions"] = interactions
-            entry["interactionCount"] = interactions.count
+            entry["interactionCount"] = interactions?.count
 
             exportData.append(entry)
         }
@@ -145,9 +145,9 @@ struct OrbitExporter {
             let targetOrbit = String(contact.targetOrbit)
             let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
             let daysSince = contact.daysSinceLastContact.map(String.init) ?? "N/A"
-            let interactionCount = String(contact.interactions.filter({ !$0.isDeleted }).count)
+            let interactionCount = String((contact.interactions ?? []).filter({ !$0.isDeleted }).count)
             let tags = csvEscape(contact.tagNames.joined(separator: "; "))
-            let constellations = csvEscape(contact.constellations.map(\.name).joined(separator: "; "))
+            let constellations = csvEscape((contact.constellations ?? []).map(\.name).joined(separator: "; "))
             let archived = contact.isArchived ? "Yes" : "No"
             let notes = csvEscape(contact.notes)
 

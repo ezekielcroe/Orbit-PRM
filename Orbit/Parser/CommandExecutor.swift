@@ -155,7 +155,7 @@ final class CommandExecutor {
         let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
 
         // Find existing artifact with this key, or create new
-        if let existing = contact.artifacts.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+        if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
             existing.setValue(value)
             if let newCategory = parsedCategory { existing.category = newCategory }
         } else {
@@ -186,7 +186,7 @@ final class CommandExecutor {
 
         let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
 
-        if let existing = contact.artifacts.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+        if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
             if !existing.isArray && !forceConvert {
                 let retryCommand = ParsedCommand.appendArtifact(contactName: contactName, key: key, value: value, forceConvert: true)
                 return CommandResult(success: false, message: "Requires conversion confirmation.", affectedContact: nil, requiresConversionPrompt: retryCommand)
@@ -214,7 +214,7 @@ final class CommandExecutor {
             return CommandResult(success: false, message: "Contact '\(contactName)' not found.", affectedContact: nil)
         }
 
-        guard let existing = contact.artifacts.first(where: { $0.searchableKey == key.lowercased() }) else {
+        guard let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) else {
             return CommandResult(success: false, message: "\(contact.name) has no '\(key)' artifact.", affectedContact: contact)
         }
 
@@ -236,7 +236,7 @@ final class CommandExecutor {
             return CommandResult(success: false, message: "Contact '\(contactName)' not found.", affectedContact: nil)
         }
 
-        guard let existing = contact.artifacts.first(where: { $0.searchableKey == key.lowercased() }) else {
+        guard let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) else {
             return CommandResult(success: false, message: "\(contact.name) has no '\(key)' artifact.", affectedContact: contact)
         }
 
@@ -294,8 +294,8 @@ final class CommandExecutor {
             )
         }
 
-        let members = constellation.contacts.filter { !$0.isArchived }
-        guard !members.isEmpty else {
+        let members = (constellation.contacts ?? []).filter { !$0.isArchived }
+        guard !(members.isEmpty) else {
             return CommandResult(
                 success: false,
                 message: "✦ \(constellation.name) has no active contacts.",
@@ -325,7 +325,7 @@ final class CommandExecutor {
         let dateStr = timeModifier != nil ? " on \(date.formatted(date: .abbreviated, time: .omitted))" : ""
         return CommandResult(
             success: true,
-            message: "Logged \(impulse) with \(members.count) contacts in ✦ \(constellation.name)\(dateStr)",
+            message: "Logged \(impulse) with \(String(describing: members.count)) contacts in ✦ \(constellation.name)\(dateStr)",
             affectedContact: members.first
         )
     }
@@ -342,15 +342,17 @@ final class CommandExecutor {
         let constellation = findOrCreateConstellation(named: constellationName, in: context)
 
         // Check if already a member
-        if contact.constellations.contains(where: { $0.id == constellation.id }) {
+        if contact.constellations?.contains(where: { $0.id == constellation.id }) ?? false {
             return CommandResult(
                 success: true,
                 message: "\(contact.name) is already in ✦ \(constellation.name)",
                 affectedContact: contact
             )
         }
-
-        contact.constellations.append(constellation)
+        if contact.constellations == nil {
+            contact.constellations = []
+        }
+        contact.constellations?.append(constellation)
         contact.modifiedAt = Date()
 
         return CommandResult(
@@ -370,7 +372,7 @@ final class CommandExecutor {
         }
 
         let searchName = constellationName.lowercased()
-        guard let index = contact.constellations.firstIndex(where: { $0.searchableName == searchName }) else {
+        guard let index = contact.constellations?.firstIndex(where: { $0.searchableName == searchName }) else {
             return CommandResult(
                 success: false,
                 message: "\(contact.name) is not in a constellation named '\(constellationName)'.",
@@ -378,13 +380,13 @@ final class CommandExecutor {
             )
         }
 
-        let name = contact.constellations[index].name
-        contact.constellations.remove(at: index)
+        let name = contact.constellations?[index].name ?? "Unknown"
+        contact.constellations?.remove(at: index)
         contact.modifiedAt = Date()
 
         return CommandResult(
             success: true,
-            message: "Removed \(contact.name) from ✦ \(name)",
+            message: "Removed \(contact.name) from ✦ \(String(describing: name))",
             affectedContact: contact
         )
     }

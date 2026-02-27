@@ -32,7 +32,7 @@ struct ConstellationFormSheet: View {
         if let constellation = editingConstellation {
             _name = State(initialValue: constellation.name)
             _notes = State(initialValue: constellation.notes)
-            _selectedContactIDs = State(initialValue: Set(constellation.contacts.map(\.id)))
+            _selectedContactIDs = State(initialValue: Set((constellation.contacts ?? []).map(\.id)))
         } else {
             _name = State(initialValue: "")
             _notes = State(initialValue: "")
@@ -105,19 +105,24 @@ struct ConstellationFormSheet: View {
             constellation.name = name
             constellation.notes = notes
             
-            // Safely compute additions and removals to update relationships
-            let existingIDs = Set(constellation.contacts.map(\.id))
-            
-            let contactsToRemove = constellation.contacts.filter { !selectedContactIDs.contains($0.id) }
+            // 1. Safely map and filter using ?? []
+            let existingIDs = Set((constellation.contacts ?? []).map(\.id))
+            let contactsToRemove = (constellation.contacts ?? []).filter { !selectedContactIDs.contains($0.id) }
             let contactsToAdd = selectedContacts.filter { !existingIDs.contains($0.id) }
-            
+                        
+            // 2. Safely mutate the array using optional chaining (?.)
             for contact in contactsToRemove {
-                constellation.contacts.removeAll(where: { $0.id == contact.id })
+                constellation.contacts?.removeAll(where: { $0.id == contact.id })
                 contact.modifiedAt = Date()
             }
-            
+                        
+            // 3. Ensure the array exists before trying to append to it
+            if constellation.contacts == nil {
+                constellation.contacts = []
+            }
+                        
             for contact in contactsToAdd {
-                constellation.contacts.append(contact)
+                constellation.contacts?.append(contact)
                 contact.modifiedAt = Date()
             }
             

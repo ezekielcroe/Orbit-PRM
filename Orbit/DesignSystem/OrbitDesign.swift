@@ -93,11 +93,11 @@ enum OrbitTypography {
     /// 4 (Deep Space) → .ultraLight
     private static func weightForOrbit(_ orbit: Int) -> Font.Weight {
         switch orbit {
-        case 0: return .bold
-        case 1: return .semibold
-        case 2: return .medium
-        case 3: return .regular
-        case 4: return .light
+        case 0: return .heavy       // was .bold
+        case 1: return .bold        // was .semibold
+        case 2: return .medium      // unchanged
+        case 3: return .light       // was .regular
+        case 4: return .ultraLight  // was .light
         default: return .regular
         }
     }

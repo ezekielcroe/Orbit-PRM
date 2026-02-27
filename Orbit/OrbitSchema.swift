@@ -37,16 +37,16 @@ final class Contact {
 
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \Interaction.contact)
-    var interactions: [Interaction] = []
+    var interactions: [Interaction]?
 
     @Relationship(deleteRule: .cascade, inverse: \Artifact.contact)
-    var artifacts: [Artifact] = []
+    var artifacts: [Artifact]?
 
     // Tags are interaction-level only — no Contact ↔ Tag relationship.
     // Use aggregatedTags to see which tags appear across this contact's interactions.
 
     @Relationship(inverse: \Constellation.contacts)
-    var constellations: [Constellation] = []
+    var constellations: [Constellation]?
 
     init(name: String, notes: String = "", targetOrbit: Int = 2) {
         self.id = UUID()
@@ -83,7 +83,7 @@ final class Contact {
     }
 
     func refreshLastContactDate() {
-        lastContactDate = interactions
+        lastContactDate = interactions?
             .filter { !$0.isDeleted }
             .map(\.date)
             .max()
@@ -170,9 +170,9 @@ final class Contact {
 
     /// Active (non-deleted) interactions, sorted most recent first
     var activeInteractions: [Interaction] {
-        interactions
-            .filter { !$0.isDeleted }
-            .sorted { $0.date > $1.date }
+            (interactions ?? [])
+                .filter { !$0.isDeleted }
+                .sorted { $0.date > $1.date }
     }
 
     /// Human-readable recency description
@@ -313,7 +313,7 @@ final class Constellation {
     var createdAt: Date = Date()
 
     @Relationship
-    var contacts: [Contact] = []
+    var contacts: [Contact]?
 
     init(name: String, notes: String = "") {
         self.id = UUID()

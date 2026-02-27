@@ -86,7 +86,7 @@ struct ConstellationInteractionSheet: View {
     }
 
     private func saveInteraction() {
-        let activeMembers = constellation.contacts.filter { !$0.isArchived }
+        let activeMembers = (constellation.contacts ?? []).filter { !$0.isArchived }
         
         for contact in activeMembers {
             let interaction = Interaction(

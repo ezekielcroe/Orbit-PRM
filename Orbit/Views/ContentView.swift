@@ -113,7 +113,9 @@ struct ContentView: View {
                 
             case .constellations:
                 if let constellation = selectedConstellation {
-                    ConstellationDetailView(constellation: constellation)
+                    NavigationStack {
+                        ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
+                    }
                 } else {
                     ContentUnavailableView("Select a Constellation", systemImage: "star")
                 }
@@ -154,7 +156,7 @@ struct ContentView: View {
             NavigationStack {
                 ConstellationListView(selectedConstellation: $selectedConstellation)
                     .navigationDestination(item: $selectedConstellation) { constellation in
-                        ConstellationDetailView(constellation: constellation)
+                        ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
                     }
             }
             .tabItem { Label("Constellations", systemImage: "star") }

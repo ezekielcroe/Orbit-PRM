@@ -166,7 +166,7 @@ final class DataValidator {
         if let contacts = try? context.fetch(contactDescriptor) {
             for contact in contacts {
                 // Verify lastContactDate matches actual interactions
-                let actualLast = contact.interactions
+                let actualLast = (contact.interactions ?? [])
                     .filter { !$0.isDeleted }
                     .map(\.date)
                     .max()

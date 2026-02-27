@@ -201,7 +201,7 @@ struct ArtifactEditSheet: View {
                           "phone", "email", "likes", "children", "met_at",
                           "default_activity", "pronouns", "anniversary",
                           "hometown", "notes", "website"]
-        let existingKeys = Set(contact.artifacts.map(\.searchableKey))
+        let existingKeys = Set((contact.artifacts ?? []).map(\.searchableKey))
         let available = commonKeys.filter { !existingKeys.contains($0) }
 
         return Group {

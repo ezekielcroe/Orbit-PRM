@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 #if canImport(Contacts)
 import Contacts
 #endif
@@ -20,11 +21,15 @@ struct SettingsView: View {
     @Query private var allConstellations: [Constellation]
 
     // General State
-    @State private var showExportSheet = false
     @State private var showImportConfirmation = false
     @State private var showDeleteConfirmation = false
-    @State private var exportURL: URL?
     @State private var isExporting = false
+
+    // File Exporter State
+    @State private var showJSONExporter = false
+    @State private var showCSVExporter = false
+    @State private var exportDocument: ExportDocument?
+    @State private var exportFilename: String = ""
     
     // Import State
     @State private var showImportPreview = false
@@ -104,6 +109,24 @@ struct SettingsView: View {
                     importableContacts: $importableContacts,
                     onImport: { selectedContacts, defaultOrbit in importSelectedContacts(selectedContacts, defaultOrbit: defaultOrbit) }
                 )
+            }
+            // File Exporter: JSON
+            .fileExporter(
+                isPresented: $showJSONExporter,
+                document: exportDocument,
+                contentType: .json,
+                defaultFilename: exportFilename
+            ) { result in
+                handleExportResult(result)
+            }
+            // File Exporter: CSV
+            .fileExporter(
+                isPresented: $showCSVExporter,
+                document: exportDocument,
+                contentType: .commaSeparatedText,
+                defaultFilename: exportFilename
+            ) { result in
+                handleExportResult(result)
             }
     }
 
@@ -538,103 +561,118 @@ struct SettingsView: View {
 
     // MARK: - Logic: Data Export
 
-        private func exportJSON() {
-            isExporting = true
-            DispatchQueue.global(qos: .userInitiated).async {
-                // Manually map the SwiftData models into JSON-compatible dictionaries
-                let exportData = self.allContacts.map { contact -> [String: Any] in
-                    var dict: [String: Any] = [
-                        "id": contact.id.uuidString,
-                        "name": contact.name,
-                        "targetOrbit": contact.targetOrbit,
-                        "isArchived": contact.isArchived,
-                        "notes": contact.notes,
-                        "createdAt": contact.createdAt.timeIntervalSince1970,
-                        "modifiedAt": contact.modifiedAt.timeIntervalSince1970
-                    ]
-                    
-                    if let lastContact = contact.lastContactDate {
-                        dict["lastContactDate"] = lastContact.timeIntervalSince1970
-                    }
-                    
-                    // Map Artifacts
-                    dict["artifacts"] = contact.artifacts.map { artifact -> [String: Any] in
-                        return [
-                            "key": artifact.key,
-                            "value": artifact.value,
-                            "category": artifact.category ?? ""
-                        ]
-                    }
-                    
-                    // Map Interactions
-                    dict["interactions"] = contact.interactions.map { interaction -> [String: Any] in
-                        return [
-                            "date": interaction.date.timeIntervalSince1970,
-                            "impulse": interaction.impulse,
-                            "content": interaction.content,
-                            "tagNames": interaction.tagNames,
-                            "isDeleted": interaction.isDeleted
-                        ]
-                    }
-                    
-                    // Map Constellations
-                    dict["constellations"] = contact.constellations.map { $0.name }
-                    
-                    return dict
-                }
-                
-                do {
-                    let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted])
-                    self.saveDataToDisk(jsonData, filename: "Orbit_Export_\(self.formattedDate()).json")
-                } catch {
-                    DispatchQueue.main.async {
-                        self.importResultMessage = "Failed to generate JSON: \(error.localizedDescription)"
-                        self.showImportResults = true
-                        self.isExporting = false
-                    }
-                }
-            }
-        }
-
-    private func exportCSV() {
+    private func exportJSON() {
         isExporting = true
         DispatchQueue.global(qos: .userInitiated).async {
-            var csvString = "Name,Orbit,Last Contact,Tags,Notes\n"
-            
-            for contact in self.allContacts {
-                let name = contact.name.replacingOccurrences(of: ",", with: "")
-                let orbit = contact.orbitZoneName
-                let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
-                let tags = contact.aggregatedTags.map { $0.name }.joined(separator: "; ")
-                let notes = contact.notes.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: ",", with: "")
+            let exportData = self.allContacts.map { contact -> [String: Any] in
+                var dict: [String: Any] = [
+                    "id": contact.id.uuidString,
+                    "name": contact.name,
+                    "targetOrbit": contact.targetOrbit,
+                    "isArchived": contact.isArchived,
+                    "notes": contact.notes,
+                    "createdAt": contact.createdAt.timeIntervalSince1970,
+                    "modifiedAt": contact.modifiedAt.timeIntervalSince1970
+                ]
                 
-                csvString += "\(name),\(orbit),\(lastContact),\(tags),\(notes)\n"
+                if let lastContact = contact.lastContactDate {
+                    dict["lastContactDate"] = lastContact.timeIntervalSince1970
+                }
+                
+                dict["artifacts"] = (contact.artifacts ?? []).map { artifact -> [String: Any] in
+                    return [
+                        "key": artifact.key,
+                        "value": artifact.value,
+                        "category": artifact.category ?? ""
+                    ]
+                }
+                
+                dict["interactions"] = (contact.interactions ?? []).map { interaction -> [String: Any] in
+                    return [
+                        "date": interaction.date.timeIntervalSince1970,
+                        "impulse": interaction.impulse,
+                        "content": interaction.content,
+                        "tagNames": interaction.tagNames,
+                        "isDeleted": interaction.isDeleted
+                    ]
+                }
+                
+                dict["constellations"] = (contact.constellations ?? []).map { $0.name }
+                
+                return dict
             }
             
-            if let data = csvString.data(using: .utf8) {
-                self.saveDataToDisk(data, filename: "Orbit_Export_\(self.formattedDate()).csv")
+            do {
+                let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted, .sortedKeys])
+                DispatchQueue.main.async {
+                    self.exportDocument = ExportDocument(data: jsonData)
+                    self.exportFilename = "Orbit_Export_\(self.formattedDate()).json"
+                    self.isExporting = false
+                    self.showJSONExporter = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.importResultMessage = "Failed to generate JSON: \(error.localizedDescription)"
+                    self.showImportResults = true
+                    self.isExporting = false
+                }
             }
         }
     }
 
-    private func saveDataToDisk(_ data: Data, filename: String) {
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        do {
-            try data.write(to: tempURL)
-            DispatchQueue.main.async {
-                self.exportURL = tempURL
-                self.isExporting = false
-                // Note: Implement standard Share/Save sheet logic here based on your platform (UIActivityViewController / NSWorkspace)
-                self.importResultMessage = "Data prepared. You can find it at: \(tempURL.path)"
-                self.showImportResults = true
+    private func exportCSV() {
+        isExporting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var csv = "Name,Orbit Zone,Target Orbit,Last Contact,Days Since Contact,Interaction Count,Tags,Constellations,Archived,Notes\n"
+            
+            for contact in self.allContacts {
+                let name = Self.csvEscape(contact.name)
+                let orbit = contact.orbitZoneName
+                let targetOrbit = String(contact.targetOrbit)
+                let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
+                let daysSince = contact.daysSinceLastContact.map(String.init) ?? "N/A"
+                let interactionCount = String((contact.interactions ?? []).filter({ !$0.isDeleted }).count)
+                let tags = Self.csvEscape(contact.aggregatedTags.map(\.name).joined(separator: "; "))
+                let constellations = Self.csvEscape((contact.constellations ?? []).map(\.name).joined(separator: "; "))
+                let archived = contact.isArchived ? "Yes" : "No"
+                let notes = Self.csvEscape(contact.notes)
+                
+                csv += "\(name),\(orbit),\(targetOrbit),\(lastContact),\(daysSince),\(interactionCount),\(tags),\(constellations),\(archived),\(notes)\n"
             }
-        } catch {
-            DispatchQueue.main.async {
-                self.importResultMessage = "Failed to write file: \(error.localizedDescription)"
-                self.showImportResults = true
-                self.isExporting = false
+            
+            if let data = csv.data(using: .utf8) {
+                DispatchQueue.main.async {
+                    self.exportDocument = ExportDocument(data: data)
+                    self.exportFilename = "Orbit_Export_\(self.formattedDate()).csv"
+                    self.isExporting = false
+                    self.showCSVExporter = true
+                }
             }
         }
+    }
+
+    private func handleExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success:
+            importResultMessage = "Export saved successfully."
+            showImportResults = true
+        case .failure(let error):
+            // User cancellation is not an error worth surfacing
+            if (error as NSError).domain == NSCocoaErrorDomain && (error as NSError).code == NSUserCancelledError {
+                return
+            }
+            importResultMessage = "Export failed: \(error.localizedDescription)"
+            showImportResults = true
+        }
+        exportDocument = nil
+    }
+
+    /// Escape a field for CSV (wrap in quotes if it contains commas, quotes, or newlines)
+    private static func csvEscape(_ field: String) -> String {
+        if field.contains(",") || field.contains("\"") || field.contains("\n") {
+            return "\"\(field.replacingOccurrences(of: "\"", with: "\"\""))\""
+        }
+        return field
     }
 
     private func formattedDate() -> String {
@@ -855,5 +893,28 @@ enum AppTint: String, CaseIterable, Identifiable {
         case .green: return .green
         case .red: return .red
         }
+    }
+}
+
+// MARK: - Export Document
+
+/// A lightweight FileDocument wrapper that carries pre-built export data
+/// for use with SwiftUI's `.fileExporter()` modifier.
+struct ExportDocument: FileDocument {
+
+    static var readableContentTypes: [UTType] { [.json, .commaSeparatedText] }
+
+    let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        self.data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
