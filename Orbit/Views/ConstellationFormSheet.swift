@@ -163,7 +163,7 @@ struct ContactSelectionView: View {
                 } label: {
                     HStack(spacing: OrbitSpacing.md) {
                         Image(systemName: selectedContactIDs.contains(contact.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selectedContactIDs.contains(contact.id) ? .blue : .tertiary)
+                            .foregroundStyle(selectedContactIDs.contains(contact.id) ? .blue : .secondary)
                             .font(.title3)
                         
                         VStack(alignment: .leading, spacing: 2) {
