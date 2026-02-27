@@ -2,16 +2,9 @@ import SwiftUI
 import SwiftData
 import CoreSpotlight
 
-// MARK: - OrbitApp (Phase 2)
-// Updates from Phase 1:
-// - Spotlight indexer injected into environment
-// - Data validator injected into environment
-// - macOS menu commands enabled
-// - Handles Spotlight continuation (user taps a search result)
-// - Graceful error handling for ModelContainer initialization
-//
-// FIX 2: macOS Settings scene passes environment objects and uses
-//        a wider default frame. SettingsView itself handles the TabView.
+// MARK: - OrbitApp (Phase 2 + Fix 1)
+// FIX 1: Recovery mode now sets a flag that the UI can display,
+// alerting the user they're running without iCloud sync.
 
 @main
 struct OrbitApp: App {
@@ -20,16 +13,23 @@ struct OrbitApp: App {
     let spotlightIndexer = SpotlightIndexer()
     let dataValidator = DataValidator()
 
+    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    @AppStorage("appTint") private var appTint: AppTint = .blue
+    
     @State private var spotlightContactID: UUID?
+    @State private var isRecoveryBannerVisible: Bool = false
+
+    // FIX 1: Track if we're in recovery mode
+    private let isRecoveryMode: Bool
 
     init() {
+        var recoveryMode = false
+
         do {
             let schema = Schema(OrbitSchemaV1.models)
             let config = ModelConfiguration(
                 "Orbit",
                 schema: schema,
-                // CloudKit sync enabled.
-                // For local-only development, change to .none
                 cloudKitDatabase: .automatic
             )
 
@@ -38,8 +38,6 @@ struct OrbitApp: App {
                 configurations: [config]
             )
         } catch {
-            // Phase 2: More graceful handling than fatalError.
-            // Log the error and attempt a fallback with a fresh store.
             print("❌ ModelContainer initialization failed: \(error.localizedDescription)")
             print("Attempting fallback with fresh store...")
 
@@ -54,37 +52,96 @@ struct OrbitApp: App {
                     for: schema,
                     configurations: [fallbackConfig]
                 )
+                recoveryMode = true
                 print("⚠️ Running in recovery mode (local only, no sync)")
             } catch {
                 fatalError("Cannot initialize any ModelContainer: \(error.localizedDescription)")
             }
         }
+
+        self.isRecoveryMode = recoveryMode
+        self._isRecoveryBannerVisible = State(initialValue: recoveryMode)
     }
 
     var body: some Scene {
+        #if os(macOS)
         WindowGroup {
-            ContentView(spotlightContactID: $spotlightContactID)
-                .environment(commandExecutor)
-                .environment(spotlightIndexer)
-                .environment(dataValidator)
-                .onContinueUserActivity(CSSearchableItemActionType) { activity in
-                    // Handle Spotlight result taps
-                    spotlightContactID = SpotlightIndexer.contactID(from: activity)
+            VStack(spacing: 0) {
+                ContentView(spotlightContactID: $spotlightContactID)
+                    .environment(commandExecutor)
+                    .environment(spotlightIndexer)
+                    .environment(dataValidator)
+                    .preferredColorScheme(appTheme.colorScheme)
+                    .tint(appTint.color)
+                    .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
+                        if let contactID = SpotlightIndexer.contactID(from: userActivity) {
+                            spotlightContactID = contactID
+                        }
+                    }
+
+                if isRecoveryMode && isRecoveryBannerVisible {
+                    recoveryBanner
                 }
+            }
         }
         .modelContainer(container)
-        // Phase 2: macOS menu commands
         .commands {
             OrbitCommands()
         }
-
-        #if os(macOS)
+        .windowStyle(.hiddenTitleBar)
         Settings {
             SettingsView()
                 .modelContainer(container)
                 .environment(dataValidator)
+                .environment(spotlightIndexer)
+                .preferredColorScheme(appTheme.colorScheme)
+                .tint(appTint.color)
                 .frame(minWidth: 520, minHeight: 420)
         }
+        #else
+        WindowGroup {
+            VStack(spacing: 0) {
+                ContentView(spotlightContactID: $spotlightContactID)
+                    .environment(commandExecutor)
+                    .environment(spotlightIndexer)
+                    .environment(dataValidator)
+                    .preferredColorScheme(appTheme.colorScheme)
+                    .tint(appTint.color)
+                    .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
+                        if let contactID = SpotlightIndexer.contactID(from: userActivity) {
+                            spotlightContactID = contactID
+                        }
+                    }
+
+                if isRecoveryMode && isRecoveryBannerVisible {
+                    recoveryBanner
+                }
+            }
+        }
+        .modelContainer(container)
+        .commands {
+            OrbitCommands()
+        }
         #endif
+    }
+
+    // FIX 1: Visual indicator when running in recovery mode
+    private var recoveryBanner: some View {
+        HStack(spacing: OrbitSpacing.sm) {
+            Image(systemName: "exclamationmark.icloud")
+                .font(.caption)
+            Text("Running in recovery mode — iCloud sync is disabled")
+                .font(OrbitTypography.footnote)
+            Spacer()
+            Button(action: { isRecoveryBannerVisible = false }) {
+                Image(systemName: "xmark")
+                    .font(.caption.bold())
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, OrbitSpacing.md)
+        .padding(.vertical, OrbitSpacing.sm)
+        .background(.orange.gradient)
     }
 }

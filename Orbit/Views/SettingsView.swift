@@ -4,14 +4,14 @@ import SwiftData
 import Contacts
 #endif
 
-// MARK: - SettingsView
+// MARK: - SettingsView (Power User Edition)
 // Central hub for data management, export, import, and app preferences.
-// Accessible from the sidebar. Emphasizes data ownership — export and
-// import are first-class citizens, not buried in submenus.
-//
+// Features Data Integrity checks, Spotlight rebuilding, and cascading tag renames.
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(DataValidator.self) private var validator
+    @Environment(SpotlightIndexer.self) private var spotlightIndexer
 
     @Query private var allContacts: [Contact]
     @Query private var allInteractions: [Interaction]
@@ -19,69 +19,90 @@ struct SettingsView: View {
     @Query private var allTags: [Tag]
     @Query private var allConstellations: [Constellation]
 
+    // General State
     @State private var showExportSheet = false
     @State private var showImportConfirmation = false
     @State private var showDeleteConfirmation = false
-    @State private var showImportResults = false
-    @State private var importResultMessage = ""
     @State private var exportURL: URL?
     @State private var isExporting = false
-    @State private var isImporting = false
-    @State private var contactsAccessStatus: String = "Not checked"
-    @State private var showOpenSettingsAlert = false
-
-    // FIX 3: Import preview state
+    
+    // Import State
     @State private var showImportPreview = false
     @State private var importableContacts: [ImportableContact] = []
     @State private var isFetchingContacts = false
+    @State private var isImporting = false
+    @State private var showImportResults = false
+    @State private var importResultMessage = ""
+    @State private var contactsAccessStatus: String = "Not checked"
+    @State private var showOpenSettingsAlert = false
 
-    // Tag/Constellation management
+    // Tag Management State
     @State private var showAddTag = false
     @State private var newTagName = ""
-    @State private var showAddConstellation = false
-    @State private var selectedConstellation: Constellation?
+    @State private var tagToRename: Tag?
+    @State private var renameTagText = ""
 
-    #if os(iOS)
-    @State private var showShareSheet = false
-    #endif
+    // Maintenance State
+    @State private var showIntegrityResults = false
+    @State private var integrityResultMessage = ""
+    @State private var isReindexing = false
+    
+    // Appearance State
+    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    @AppStorage("appTint") private var appTint: AppTint = .blue
 
     var body: some View {
         settingsContent
-            .alert("Import Complete", isPresented: $showImportResults) {
+            // Alert: Generic Info
+            .alert("Notice", isPresented: $showImportResults) {
                 Button("OK") {}
             } message: {
                 Text(importResultMessage)
             }
+            // Alert: Integrity Results
+            .alert("Database Doctor", isPresented: $showIntegrityResults) {
+                Button("Done") {}
+            } message: {
+                Text(integrityResultMessage)
+            }
+            // Alert: Delete All
             .alert("Delete All Data", isPresented: $showDeleteConfirmation) {
-                Button("Delete Everything", role: .destructive) {
-                    deleteAllData()
-                }
+                Button("Delete Everything", role: .destructive) { deleteAllData() }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This action cannot be undone.")
             }
+            // Alert: Contacts Permission
             .alert("Contacts Access Required", isPresented: $showOpenSettingsAlert) {
                 Button("Open Settings") {
                     #if os(iOS)
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     #else
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") { NSWorkspace.shared.open(url) }
                     #endif
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You previously declined Contacts access. To import contacts, open Settings and enable Contacts permission for Orbit.")
             }
+            // Alert: Rename Tag
+            .alert("Rename Tag", isPresented: Binding(
+                get: { tagToRename != nil },
+                set: { if !$0 { tagToRename = nil } }
+            )) {
+                TextField("New name", text: $renameTagText)
+                Button("Rename") {
+                    if let tag = tagToRename { renameTag(tag, to: renameTagText) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will update the tag on all existing interactions across your database.")
+            }
+            // Sheet: Import Contacts
             .sheet(isPresented: $showImportPreview) {
                 ImportPreviewSheet(
                     importableContacts: $importableContacts,
-                    onImport: { selectedContacts, defaultOrbit in
-                        importSelectedContacts(selectedContacts, defaultOrbit: defaultOrbit)
-                    }
+                    onImport: { selectedContacts, defaultOrbit in importSelectedContacts(selectedContacts, defaultOrbit: defaultOrbit) }
                 )
             }
     }
@@ -92,43 +113,28 @@ struct SettingsView: View {
     private var settingsContent: some View {
         #if os(macOS)
         TabView {
-            Form {
-                dataOverviewSection
-                aboutSection
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("General", systemImage: "gear") }
-            .tag(0)
+            Form { appearanceSection; dataOverviewSection; aboutSection }
+                .formStyle(.grouped)
+                .tabItem { Label("General", systemImage: "gear") }.tag(0)
 
-            Form {
-                tagRegistrySection
-                constellationManagementSection
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Organize", systemImage: "tag") }
-            .tag(1)
+            Form { tagRegistrySection }
+                .formStyle(.grouped)
+                .tabItem { Label("Tags", systemImage: "tag") }.tag(1)
 
-            Form {
-                exportSection
-                importSection
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Data", systemImage: "externaldrive") }
-            .tag(2)
+            Form { exportSection; importSection }
+                .formStyle(.grouped)
+                .tabItem { Label("Data", systemImage: "arrow.up.arrow.down") }.tag(2)
 
-            Form {
-                dataManagementSection
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
-            .tag(3)
+            Form { dataManagementSection }
+                .formStyle(.grouped)
+                .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }.tag(3)
         }
-        .frame(minWidth: 480)
+        .frame(minWidth: 500, minHeight: 400)
         #else
         Form {
+            appearanceSection
             dataOverviewSection
             tagRegistrySection
-            constellationManagementSection
             exportSection
             importSection
             dataManagementSection
@@ -149,16 +155,44 @@ struct SettingsView: View {
             StatRow(label: "Tags", value: "\(allTags.count)")
             StatRow(label: "Constellations", value: "\(allConstellations.count)")
         } header: {
-            Text("Your Data")
+            Text("Your Database")
         } footer: {
             Text("All data is stored locally on your device and synced via your personal iCloud account. Orbit never sends your data to external servers.")
         }
     }
+    
+    // MARK: - Appearance
+
+        private var appearanceSection: some View {
+            Section {
+                Picker("Theme", selection: $appTheme) {
+                    ForEach(AppTheme.allCases, id: \.self) { theme in
+                        Text(theme.rawValue).tag(theme)
+                    }
+                }
+                #if os(iOS)
+                .pickerStyle(.menu)
+                #endif
+                
+                Picker("Accent Color", selection: $appTint) {
+                    ForEach(AppTint.allCases) { tint in
+                        HStack {
+                            Text(tint.rawValue.capitalized)
+                        }
+                        .tag(tint)
+                    }
+                }
+                #if os(iOS)
+                .pickerStyle(.menu)
+                #endif
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Accent color applies to buttons, highlights, and primary UI elements across Orbit.")
+            }
+        }
 
     // MARK: - Tag Registry
-    // Tags are interaction-level data, not contact labels.
-    // This section manages the tag name registry used for autocomplete
-    // in the command palette.
 
     private var tagRegistrySection: some View {
         Section {
@@ -172,13 +206,17 @@ struct SettingsView: View {
                         Text("#\(tag.name)")
                             .font(OrbitTypography.bodyMedium)
                             .foregroundStyle(OrbitColors.syntaxTag)
-
                         Spacer()
                     }
-                    .swipeActions(edge: .trailing) {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button("Delete", role: .destructive) {
                             modelContext.delete(tag)
                         }
+                        Button("Rename") {
+                            tagToRename = tag
+                            renameTagText = tag.name
+                        }
+                        .tint(.orange)
                     }
                 }
             }
@@ -191,85 +229,18 @@ struct SettingsView: View {
         } header: {
             Text("Tag Registry")
         } footer: {
-            Text("Tags appear as autocomplete suggestions in the command palette. They are stored on interactions, not contacts — use Constellations to group people.")
+            Text("Swipe left on a tag to rename or delete it. Renaming a tag automatically updates all historical interactions that used the old name.")
         }
         .alert("New Tag", isPresented: $showAddTag) {
             TextField("Tag name", text: $newTagName)
             Button("Create") {
                 let trimmed = newTagName.trimmingCharacters(in: .whitespaces)
                 if !trimmed.isEmpty {
-                    let tag = Tag(name: trimmed)
-                    modelContext.insert(tag)
+                    modelContext.insert(Tag(name: trimmed))
                     newTagName = ""
                 }
             }
-            Button("Cancel", role: .cancel) {
-                newTagName = ""
-            }
-        }
-    }
-
-    // MARK: - Constellation Management
-
-    private var constellationManagementSection: some View {
-        Section {
-            if allConstellations.isEmpty {
-                Text("No constellations yet. Group related contacts into constellations.")
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(allConstellations) { constellation in
-                    Button {
-                        selectedConstellation = constellation
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(constellation.name)
-                                    .font(OrbitTypography.bodyMedium)
-                                    .foregroundStyle(.primary)
-
-                                if !constellation.notes.isEmpty {
-                                    Text(constellation.notes)
-                                        .font(OrbitTypography.footnote)
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                            }
-
-                            Spacer()
-
-                            Text("\(constellation.contacts.count)")
-                                .font(OrbitTypography.caption)
-                                .foregroundStyle(.secondary)
-
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.quaternary)
-                        }
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button("Delete", role: .destructive) {
-                            modelContext.delete(constellation)
-                        }
-                    }
-                }
-            }
-
-            Button {
-                showAddConstellation = true
-            } label: {
-                Label("Add Constellation", systemImage: "plus")
-            }
-        } header: {
-            Text("Constellations")
-        } footer: {
-            Text("Constellations group related contacts — use them to label who people are to you. Tap a constellation to manage its members.")
-        }
-        .sheet(isPresented: $showAddConstellation) {
-            ConstellationFormSheet()
-        }
-        .sheet(item: $selectedConstellation) { constellation in
-            ConstellationDetailSheet(constellation: constellation)
+            Button("Cancel", role: .cancel) { newTagName = "" }
         }
     }
 
@@ -277,33 +248,20 @@ struct SettingsView: View {
 
     private var exportSection: some View {
         Section {
-            Button {
-                exportJSON()
-            } label: {
-                Label("Export as JSON", systemImage: "doc.text")
-            }
+            Button { exportJSON() } label: { Label("Export as JSON", systemImage: "curlybraces") }
             .disabled(allContacts.isEmpty || isExporting)
 
-            Button {
-                exportCSV()
-            } label: {
-                Label("Export as CSV", systemImage: "tablecells")
-            }
+            Button { exportCSV() } label: { Label("Export as CSV", systemImage: "tablecells") }
             .disabled(allContacts.isEmpty || isExporting)
 
             if isExporting {
                 HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Preparing export…")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.secondary)
+                    ProgressView().controlSize(.small)
+                    Text("Preparing export…").font(OrbitTypography.caption).foregroundStyle(.secondary)
                 }
             }
-        } header: {
-            Text("Export")
-        } footer: {
-            Text("JSON includes all data: contacts, artifacts, interactions, tags, and constellations. CSV includes a summary suitable for spreadsheets.")
+        } header: { Text("Export") } footer: {
+            Text("JSON includes all metadata and relationships (perfect for backups). CSV provides a flat summary for spreadsheets.")
         }
     }
 
@@ -311,343 +269,373 @@ struct SettingsView: View {
 
     private var importSection: some View {
         Section {
-            Button {
-                checkContactsAccess()
-            } label: {
-                Label("Import from Contacts", systemImage: "person.crop.rectangle.stack")
-            }
+            Button { checkContactsAccess() } label: { Label("Import from Apple Contacts", systemImage: "person.crop.rectangle.stack") }
             .disabled(isFetchingContacts || isImporting)
 
             if isFetchingContacts {
                 HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Loading contacts…")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.secondary)
+                    ProgressView().controlSize(.small)
+                    Text("Loading contacts…").font(OrbitTypography.caption).foregroundStyle(.secondary)
                 }
             }
-
             if isImporting {
                 HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Importing…")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.secondary)
+                    ProgressView().controlSize(.small)
+                    Text("Importing…").font(OrbitTypography.caption).foregroundStyle(.secondary)
                 }
             }
-        } header: {
-            Text("Import")
-        } footer: {
-            Text("Imports names from your system Contacts. You'll be able to review and select which contacts to import before committing. Duplicates are detected automatically.")
+        } header: { Text("Import") } footer: {
+            Text("Orbit detects duplicates automatically. You will be able to review the list before any data is saved.")
         }
     }
 
-    // MARK: - Data Management
+    // MARK: - Data Management (Power Tools)
 
     private var dataManagementSection: some View {
         Section {
             Button {
+                runIntegrityCheck()
+            } label: {
+                Label("Run Database Doctor", systemImage: "stethoscope")
+            }
+
+            Button {
+                rebuildSpotlight()
+            } label: {
+                HStack {
+                    Label("Rebuild Spotlight Index", systemImage: "magnifyingglass")
+                    if isReindexing { Spacer(); ProgressView().controlSize(.small) }
+                }
+            }
+            .disabled(isReindexing)
+
+            Button {
                 purgeDeletedInteractions()
             } label: {
-                Label("Purge Deleted Interactions", systemImage: "trash.slash")
+                Label("Purge Deleted Logs", systemImage: "trash.slash")
             }
 
             Button(role: .destructive) {
                 showDeleteConfirmation = true
             } label: {
-                Label("Delete All Data", systemImage: "exclamationmark.triangle")
+                Label("Erase All Data", systemImage: "exclamationmark.triangle")
             }
         } header: {
-            Text("Data Management")
+            Text("Advanced Maintenance")
         } footer: {
-            Text("\"Purge Deleted\" permanently removes soft-deleted interaction logs. \"Delete All\" removes everything — use with extreme caution.")
+            Text("Database Doctor safely repairs orphaned records and stale cache data. Use Spotlight Rebuild if contacts aren't appearing in Apple system search.")
         }
     }
-
-    // MARK: - About
 
     private var aboutSection: some View {
-        Section("About Orbit") {
-            StatRow(label: "Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-            StatRow(label: "Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
-
+        Section {
             HStack {
-                Text("Philosophy")
-                    .font(OrbitTypography.body)
+                Text("Version")
                 Spacer()
-                Text("Accounting, not automation")
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(.secondary)
+                Text("1.0").foregroundStyle(.secondary)
             }
+        } header: {
+            Text("About")
         }
     }
 
-    // MARK: - Export Actions
+    // MARK: - Logic: Tag Rename
 
-    private func exportJSON() {
-        isExporting = true
+    private func renameTag(_ tag: Tag, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.lowercased() != tag.searchableName else { return }
 
-        Task {
-            guard let data = OrbitExporter.exportJSON(from: modelContext) else {
-                isExporting = false
-                return
+        let oldSearchName = tag.searchableName
+
+        // 1. Update the tag registry object
+        tag.name = trimmed
+        tag.searchableName = trimmed.lowercased()
+
+        // 2. Cascade update to all interactions
+        for interaction in allInteractions {
+            let tags = interaction.tagList
+            if tags.contains(where: { $0.lowercased() == oldSearchName }) {
+                // Replace old name with new name
+                let updatedTags = tags.map { $0.lowercased() == oldSearchName ? trimmed : $0 }
+                interaction.tagNames = updatedTags.joined(separator: ", ")
+                // Mark contact as modified to trigger sync
+                interaction.contact?.modifiedAt = Date()
             }
-
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("orbit-export-\(formattedDate()).json")
-
-            do {
-                try data.write(to: tempURL)
-                exportURL = tempURL
-                shareFile(at: tempURL)
-            } catch {
-                print("Export failed: \(error)")
-            }
-
-            isExporting = false
         }
+        try? modelContext.save()
     }
 
-    private func exportCSV() {
-        isExporting = true
+    // MARK: - Logic: Maintenance Actions
 
-        Task {
-            let csv = OrbitExporter.exportCSV(from: modelContext)
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("orbit-export-\(formattedDate()).csv")
-
-            do {
-                try csv.write(to: tempURL, atomically: true, encoding: .utf8)
-                shareFile(at: tempURL)
-            } catch {
-                print("Export failed: \(error)")
-            }
-
-            isExporting = false
+    private func runIntegrityCheck() {
+        let issues = validator.integrityCheck(in: modelContext)
+        if issues.isEmpty {
+            integrityResultMessage = "Your database is perfectly healthy. No orphaned artifacts or sync issues found."
+        } else {
+            integrityResultMessage = "Doctor repaired \(issues.count) issues (orphaned records removed, sync dates corrected)."
         }
+        try? modelContext.save()
+        showIntegrityResults = true
     }
 
-    private func shareFile(at url: URL) {
-        #if os(iOS)
-        // Use UIActivityViewController via a UIKit bridge
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootVC = scene.windows.first?.rootViewController else { return }
-
-        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-
-        // iPad requires a popover source
-        if let popover = activityVC.popoverPresentationController {
-            popover.sourceView = rootVC.view
-            popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
-            popover.permittedArrowDirections = []
-        }
-
-        rootVC.present(activityVC, animated: true)
-        #else
-        // macOS: Use NSSharingServicePicker or NSWorkspace
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-        #endif
-    }
-
-    // MARK: - Import Actions (FIX 3: Two-step flow)
-
-    private func checkContactsAccess() {
-        #if canImport(Contacts)
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-
-        switch status {
-        case .authorized, .limited:
-            fetchSystemContacts()
-
-        case .notDetermined:
-            let store = CNContactStore()
-            store.requestAccess(for: .contacts) { granted, error in
-                DispatchQueue.main.async {
-                    if granted {
-                        fetchSystemContacts()
-                    } else {
-                        importResultMessage = "Orbit needs Contacts access to import. You can grant this in Settings."
-                        showImportResults = true
-                    }
-                }
-            }
-
-        case .denied, .restricted:
-            showOpenSettingsAlert = true
-
-        @unknown default:
-            importResultMessage = "Unable to determine Contacts access status."
+    private func rebuildSpotlight() {
+        isReindexing = true
+        spotlightIndexer.reindexAll(from: modelContext)
+        
+        // Artificial delay for UI feedback since indexing runs asynchronously
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            isReindexing = false
+            importResultMessage = "Spotlight index rebuilt successfully."
             showImportResults = true
         }
-        #else
-        importResultMessage = "Contact import is not available on this platform."
-        showImportResults = true
-        #endif
     }
-
-    /// Step 1: Fetch system contacts and present the preview sheet
-    private func fetchSystemContacts() {
-        #if canImport(Contacts)
-        isFetchingContacts = true
-
-        Task.detached {
-            let store = CNContactStore()
-            let keysToFetch: [CNKeyDescriptor] = [
-                CNContactGivenNameKey as CNKeyDescriptor,
-                CNContactFamilyNameKey as CNKeyDescriptor,
-                CNContactNicknameKey as CNKeyDescriptor,
-                CNContactEmailAddressesKey as CNKeyDescriptor,
-                CNContactPhoneNumbersKey as CNKeyDescriptor,
-                CNContactBirthdayKey as CNKeyDescriptor,
-                CNContactPostalAddressesKey as CNKeyDescriptor,
-                CNContactOrganizationNameKey as CNKeyDescriptor,
-                CNContactJobTitleKey as CNKeyDescriptor,
-            ]
-
-            var collected: [ImportableContact] = []
-            let request = CNContactFetchRequest(keysToFetch: keysToFetch)
-
-            do {
-                // Get existing names for duplicate detection
-                let existingNames: Set<String> = await MainActor.run {
-                    let descriptor = FetchDescriptor<Contact>()
-                    let existing = (try? modelContext.fetch(descriptor)) ?? []
-                    return Set(existing.map(\.searchableName))
-                }
-
-                try store.enumerateContacts(with: request) { cnContact, _ in
-                    let fullName = [cnContact.givenName, cnContact.familyName]
-                        .filter { !$0.isEmpty }
-                        .joined(separator: " ")
-                    guard !fullName.isEmpty else { return }
-
-                    let birthday: String? = {
-                        guard let bday = cnContact.birthday,
-                              let month = bday.month,
-                              let day = bday.day else { return nil }
-                        return String(format: "%02d/%02d", month, day)
-                    }()
-
-                    let isDuplicate = existingNames.contains(fullName.lowercased())
-
-                    collected.append(ImportableContact(
-                        name: fullName,
-                        birthday: birthday,
-                        company: cnContact.organizationName.isEmpty ? nil : cnContact.organizationName,
-                        role: cnContact.jobTitle.isEmpty ? nil : cnContact.jobTitle,
-                        email: cnContact.emailAddresses.first?.value as String?,
-                        phone: cnContact.phoneNumbers.first?.value.stringValue,
-                        city: {
-                            guard let addr = cnContact.postalAddresses.first?.value else { return nil }
-                            return addr.city.isEmpty ? nil : addr.city
-                        }(),
-                        isSelected: !isDuplicate,
-                        isDuplicate: isDuplicate
-                    ))
-                }
-
-                // Sort: non-duplicates first, then alphabetically
-                collected.sort { a, b in
-                    if a.isDuplicate != b.isDuplicate {
-                        return !a.isDuplicate
-                    }
-                    return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-                }
-
-                let result = collected
-                await MainActor.run {
-                    importableContacts = result
-                    isFetchingContacts = false
-                    showImportPreview = true
-                }
-
-            } catch {
-                await MainActor.run {
-                    importResultMessage = "Failed to read contacts: \(error.localizedDescription)"
-                    showImportResults = true
-                    isFetchingContacts = false
-                }
-            }
-        }
-        #endif
-    }
-
-    /// Step 2: Import only the selected contacts with the chosen orbit zone
-    private func importSelectedContacts(_ selected: [ImportableContact], defaultOrbit: Int) {
-        isImporting = true
-
-        var imported = 0
-        for item in selected {
-            let contact = Contact(name: item.name, targetOrbit: defaultOrbit)
-            modelContext.insert(contact)
-
-            if let birthday = item.birthday {
-                let a = Artifact(key: "birthday", value: birthday)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-            if let company = item.company {
-                let a = Artifact(key: "company", value: company)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-            if let role = item.role {
-                let a = Artifact(key: "role", value: role)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-            if let email = item.email {
-                let a = Artifact(key: "email", value: email)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-            if let phone = item.phone {
-                let a = Artifact(key: "phone", value: phone)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-            if let city = item.city {
-                let a = Artifact(key: "city", value: city)
-                a.contact = contact
-                modelContext.insert(a)
-            }
-
-            imported += 1
-        }
-
-        importResultMessage = "Imported \(imported) contact\(imported == 1 ? "" : "s")."
-        showImportResults = true
-        isImporting = false
-    }
-
-    // MARK: - Data Management Actions
 
     private func purgeDeletedInteractions() {
-        let descriptor = FetchDescriptor<Interaction>(
-            predicate: #Predicate<Interaction> { $0.isDeleted == true }
-        )
-        guard let deleted = try? modelContext.fetch(descriptor) else { return }
-
+        let deleted = allInteractions.filter { $0.isDeleted }
+        let count = deleted.count
         for interaction in deleted {
             modelContext.delete(interaction)
         }
+        try? modelContext.save()
+        importResultMessage = "Purged \(count) deleted interaction\(count == 1 ? "" : "s") permanently."
+        showImportResults = true
     }
 
     private func deleteAllData() {
-        do {
-            try modelContext.delete(model: Interaction.self)
-            try modelContext.delete(model: Artifact.self)
-            try modelContext.delete(model: Tag.self)
-            try modelContext.delete(model: Constellation.self)
-            try modelContext.delete(model: Contact.self)
-        } catch {
-            print("Failed to delete all data: \(error)")
+        try? modelContext.delete(model: Interaction.self)
+        try? modelContext.delete(model: Artifact.self)
+        try? modelContext.delete(model: Contact.self)
+        try? modelContext.delete(model: Tag.self)
+        try? modelContext.delete(model: Constellation.self)
+        try? modelContext.save()
+        spotlightIndexer.deleteAll()
+        importResultMessage = "All data has been erased."
+        showImportResults = true
+    }
+
+    // MARK: - Logic: Apple Contacts Import
+
+    private func checkContactsAccess() {
+            #if canImport(Contacts)
+            let status = CNContactStore.authorizationStatus(for: .contacts)
+            switch status {
+            case .authorized, .limited: // Handle both full and limited access here
+                fetchSystemContacts()
+            case .notDetermined:
+                let store = CNContactStore()
+                store.requestAccess(for: .contacts) { granted, _ in
+                    DispatchQueue.main.async {
+                        if granted {
+                            self.fetchSystemContacts()
+                        } else {
+                            self.showOpenSettingsAlert = true
+                        }
+                    }
+                }
+            case .denied, .restricted:
+                showOpenSettingsAlert = true
+            @unknown default:
+                break
+            }
+            #else
+            importResultMessage = "Contacts import is not supported on this platform."
+            showImportResults = true
+            #endif
+        }
+
+    private func fetchSystemContacts() {
+        #if canImport(Contacts)
+        isFetchingContacts = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let store = CNContactStore()
+            let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactOrganizationNameKey, CNContactBirthdayKey, CNContactEmailAddressesKey, CNContactPhoneNumbersKey] as [CNKeyDescriptor]
+            let request = CNContactFetchRequest(keysToFetch: keys)
+            
+            var fetched: [ImportableContact] = []
+            
+            do {
+                try store.enumerateContacts(with: request) { contact, _ in
+                    let name = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+                    if !name.isEmpty {
+                        var details: [String] = []
+                        if !contact.organizationName.isEmpty { details.append("Company: \(contact.organizationName)") }
+                        if let bday = contact.birthday, let month = bday.month, let day = bday.day {
+                            details.append("Birthday: \(month)/\(day)")
+                        }
+                        
+                        // Extract emails and phones for artifacts
+                        var artifactsToCreate: [(key: String, value: String)] = []
+                        for email in contact.emailAddresses {
+                            artifactsToCreate.append((key: "Email", value: String(email.value)))
+                        }
+                        for phone in contact.phoneNumbers {
+                            artifactsToCreate.append((key: "Phone", value: phone.value.stringValue))
+                        }
+                        if !contact.organizationName.isEmpty {
+                            artifactsToCreate.append((key: "Company", value: contact.organizationName))
+                        }
+                        if let bday = contact.birthday, let month = bday.month, let day = bday.day {
+                            artifactsToCreate.append((key: "Birthday", value: "\(month)/\(day)"))
+                        }
+
+                        let importable = ImportableContact(
+                            id: UUID(),
+                            name: name,
+                            details: details.joined(separator: " · "),
+                            artifacts: artifactsToCreate,
+                            isSelected: true
+                        )
+                        fetched.append(importable)
+                    }
+                }
+                
+                DispatchQueue.main.async {
+                    // Filter out existing
+                    let existingNames = Set(self.allContacts.map { $0.searchableName })
+                    self.importableContacts = fetched.filter { !existingNames.contains($0.name.lowercased()) }
+                    self.isFetchingContacts = false
+                    
+                    if self.importableContacts.isEmpty {
+                        self.importResultMessage = "No new contacts found to import. Everyone is already in Orbit!"
+                        self.showImportResults = true
+                    } else {
+                        self.showImportPreview = true
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isFetchingContacts = false
+                    self.importResultMessage = "Failed to read contacts: \(error.localizedDescription)"
+                    self.showImportResults = true
+                }
+            }
+        }
+        #endif
+    }
+
+    private func importSelectedContacts(_ contactsToImport: [ImportableContact], defaultOrbit: Int) {
+        isImporting = true
+        var importedCount = 0
+
+        for item in contactsToImport {
+            let newContact = Contact(name: item.name, targetOrbit: defaultOrbit)
+            modelContext.insert(newContact)
+            
+            for artifactData in item.artifacts {
+                let artifact = Artifact(key: artifactData.key, value: artifactData.value)
+                artifact.contact = newContact
+                modelContext.insert(artifact)
+            }
+            spotlightIndexer.index(contact: newContact)
+            importedCount += 1
+        }
+
+        try? modelContext.save()
+        isImporting = false
+        importResultMessage = "Successfully imported \(importedCount) contacts."
+        showImportResults = true
+    }
+
+    // MARK: - Logic: Data Export
+
+        private func exportJSON() {
+            isExporting = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Manually map the SwiftData models into JSON-compatible dictionaries
+                let exportData = self.allContacts.map { contact -> [String: Any] in
+                    var dict: [String: Any] = [
+                        "id": contact.id.uuidString,
+                        "name": contact.name,
+                        "targetOrbit": contact.targetOrbit,
+                        "isArchived": contact.isArchived,
+                        "notes": contact.notes,
+                        "createdAt": contact.createdAt.timeIntervalSince1970,
+                        "modifiedAt": contact.modifiedAt.timeIntervalSince1970
+                    ]
+                    
+                    if let lastContact = contact.lastContactDate {
+                        dict["lastContactDate"] = lastContact.timeIntervalSince1970
+                    }
+                    
+                    // Map Artifacts
+                    dict["artifacts"] = contact.artifacts.map { artifact -> [String: Any] in
+                        return [
+                            "key": artifact.key,
+                            "value": artifact.value,
+                            "category": artifact.category ?? ""
+                        ]
+                    }
+                    
+                    // Map Interactions
+                    dict["interactions"] = contact.interactions.map { interaction -> [String: Any] in
+                        return [
+                            "date": interaction.date.timeIntervalSince1970,
+                            "impulse": interaction.impulse,
+                            "content": interaction.content,
+                            "tagNames": interaction.tagNames,
+                            "isDeleted": interaction.isDeleted
+                        ]
+                    }
+                    
+                    // Map Constellations
+                    dict["constellations"] = contact.constellations.map { $0.name }
+                    
+                    return dict
+                }
+                
+                do {
+                    let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted])
+                    self.saveDataToDisk(jsonData, filename: "Orbit_Export_\(self.formattedDate()).json")
+                } catch {
+                    DispatchQueue.main.async {
+                        self.importResultMessage = "Failed to generate JSON: \(error.localizedDescription)"
+                        self.showImportResults = true
+                        self.isExporting = false
+                    }
+                }
+            }
+        }
+
+    private func exportCSV() {
+        isExporting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var csvString = "Name,Orbit,Last Contact,Tags,Notes\n"
+            
+            for contact in self.allContacts {
+                let name = contact.name.replacingOccurrences(of: ",", with: "")
+                let orbit = contact.orbitZoneName
+                let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
+                let tags = contact.aggregatedTags.map { $0.name }.joined(separator: "; ")
+                let notes = contact.notes.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: ",", with: "")
+                
+                csvString += "\(name),\(orbit),\(lastContact),\(tags),\(notes)\n"
+            }
+            
+            if let data = csvString.data(using: .utf8) {
+                self.saveDataToDisk(data, filename: "Orbit_Export_\(self.formattedDate()).csv")
+            }
         }
     }
 
-    // MARK: - Helpers
+    private func saveDataToDisk(_ data: Data, filename: String) {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try data.write(to: tempURL)
+            DispatchQueue.main.async {
+                self.exportURL = tempURL
+                self.isExporting = false
+                // Note: Implement standard Share/Save sheet logic here based on your platform (UIActivityViewController / NSWorkspace)
+                self.importResultMessage = "Data prepared. You can find it at: \(tempURL.path)"
+                self.showImportResults = true
+            }
+        } catch {
+            DispatchQueue.main.async {
+                self.importResultMessage = "Failed to write file: \(error.localizedDescription)"
+                self.showImportResults = true
+                self.isExporting = false
+            }
+        }
+    }
 
     private func formattedDate() -> String {
         let formatter = DateFormatter()
@@ -656,7 +644,7 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Stat Row
+// MARK: - Support Views
 
 struct StatRow: View {
     let label: String
@@ -665,98 +653,60 @@ struct StatRow: View {
     var body: some View {
         HStack {
             Text(label)
-                .font(OrbitTypography.body)
             Spacer()
             Text(value)
-                .font(OrbitTypography.bodyMedium)
                 .foregroundStyle(.secondary)
         }
     }
 }
 
-// MARK: - Importable Contact Model
+// MARK: - Import Preview Models & Views
 
 struct ImportableContact: Identifiable {
-    let id = UUID()
+    let id: UUID
     let name: String
-    let birthday: String?
-    let company: String?
-    let role: String?
-    let email: String?
-    let phone: String?
-    let city: String?
+    let details: String
+    let artifacts: [(key: String, value: String)]
     var isSelected: Bool
-    let isDuplicate: Bool
-
-    /// Short summary of available data for the preview row
-    var subtitle: String {
-        [company, role, city].compactMap { $0 }.joined(separator: " · ")
-    }
 }
-
-// MARK: - Import Preview Sheet
 
 struct ImportPreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
-
     @Binding var importableContacts: [ImportableContact]
     let onImport: ([ImportableContact], Int) -> Void
 
-    @State private var defaultOrbit: Int = 3
-    @State private var searchText = ""
+    @State private var defaultOrbit: Int = 3 // Standard default
+    @State private var selectAll = true
 
-    private var filteredContacts: [ImportableContact] {
-        if searchText.isEmpty { return importableContacts }
-        let query = searchText.lowercased()
-        return importableContacts.filter {
-            $0.name.lowercased().contains(query)
-            || ($0.company?.lowercased().contains(query) ?? false)
-            || ($0.city?.lowercased().contains(query) ?? false)
-        }
-    }
-
-    private var selectedCount: Int {
-        importableContacts.filter(\.isSelected).count
-    }
-
-    private var duplicateCount: Int {
-        importableContacts.filter(\.isDuplicate).count
+    var selectedCount: Int {
+        importableContacts.filter { $0.isSelected }.count
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Summary bar
-                summaryBar
-                Divider()
-
-                // Contact list
                 List {
-                    if duplicateCount > 0 {
-                        Section {
-                            HStack(spacing: OrbitSpacing.sm) {
-                                Image(systemName: "info.circle")
-                                    .foregroundStyle(.orange)
-                                    .font(.caption)
-                                Text("\(duplicateCount) contact\(duplicateCount == 1 ? "" : "s") already exist in Orbit and have been deselected.")
-                                    .font(OrbitTypography.caption)
-                                    .foregroundStyle(.secondary)
+                    Section {
+                        Toggle("Select All", isOn: $selectAll)
+                            .onChange(of: selectAll) { _, newValue in
+                                for i in importableContacts.indices {
+                                    importableContacts[i].isSelected = newValue
+                                }
                             }
+                    }
+
+                    Section(header: Text("Found \(importableContacts.count) New Contacts")) {
+                        ForEach($importableContacts) { $contact in
+                            ImportContactRow(contact: $contact)
                         }
                     }
-
-                    ForEach(filteredContacts) { contact in
-                        importContactRow(contact)
-                    }
                 }
-                .listStyle(.plain)
+                .listStyle(.insetGrouped)
 
                 Divider()
-
-                // Orbit zone picker + import button
                 importControls
             }
-            .navigationTitle("Import Contacts")
+            .navigationTitle("Review Import")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -765,118 +715,8 @@ struct ImportPreviewSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .searchable(text: $searchText, prompt: "Search contacts")
         }
     }
-
-    // MARK: - Summary Bar
-
-    private var summaryBar: some View {
-        HStack(spacing: OrbitSpacing.md) {
-            Text("\(importableContacts.count) found")
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.secondary)
-
-            Text("·")
-                .foregroundStyle(.tertiary)
-
-            Text("\(selectedCount) selected")
-                .font(OrbitTypography.captionMedium)
-                .foregroundStyle(selectedCount > 0 ? .primary : .secondary)
-
-            Spacer()
-
-            Button("Select All") {
-                for i in importableContacts.indices {
-                    importableContacts[i].isSelected = true
-                }
-            }
-            .controlSize(.small)
-
-            Button("Select None") {
-                for i in importableContacts.indices {
-                    importableContacts[i].isSelected = false
-                }
-            }
-            .controlSize(.small)
-        }
-        .padding(.horizontal, OrbitSpacing.md)
-        .padding(.vertical, OrbitSpacing.sm)
-    }
-
-    // MARK: - Contact Row
-
-    private func importContactRow(_ contact: ImportableContact) -> some View {
-        // Find the actual index in the source array for binding
-        let sourceIndex = importableContacts.firstIndex(where: { $0.id == contact.id })
-
-        return HStack(spacing: OrbitSpacing.md) {
-            // Checkbox
-            Button {
-                if let idx = sourceIndex {
-                    importableContacts[idx].isSelected.toggle()
-                }
-            } label: {
-                Image(systemName: contact.isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(contact.isSelected ? .blue : .secondary)
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: OrbitSpacing.sm) {
-                    Text(contact.name)
-                        .font(OrbitTypography.bodyMedium)
-                        .opacity(contact.isDuplicate ? 0.5 : 1.0)
-
-                    if contact.isDuplicate {
-                        Text("Duplicate")
-                            .font(OrbitTypography.footnote)
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.orange.opacity(0.1), in: Capsule())
-                    }
-                }
-
-                if !contact.subtitle.isEmpty {
-                    Text(contact.subtitle)
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            // Data indicators
-            HStack(spacing: OrbitSpacing.xs) {
-                if contact.email != nil {
-                    Image(systemName: "envelope")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                if contact.phone != nil {
-                    Image(systemName: "phone")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                if contact.birthday != nil {
-                    Image(systemName: "gift")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if let idx = sourceIndex {
-                importableContacts[idx].isSelected.toggle()
-            }
-        }
-    }
-
-    // MARK: - Import Controls
 
     private var importControls: some View {
         VStack(spacing: OrbitSpacing.sm) {
@@ -909,5 +749,74 @@ struct ImportPreviewSheet: View {
             .disabled(selectedCount == 0)
         }
         .padding(OrbitSpacing.md)
+    }
+}
+
+struct ImportContactRow: View {
+    @Binding var contact: ImportableContact
+
+    var body: some View {
+        HStack {
+            Toggle("", isOn: $contact.isSelected)
+                .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(contact.name)
+                    .font(OrbitTypography.bodyMedium)
+                if !contact.details.isEmpty {
+                    Text(contact.details)
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            if !contact.artifacts.isEmpty {
+                HStack(spacing: 2) {
+                    Text("\(contact.artifacts.count)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: "gift")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            contact.isSelected.toggle()
+        }
+    }
+}
+
+
+// MARK: - Appearance Preferences
+
+enum AppTheme: String, CaseIterable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+    
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+enum AppTint: String, CaseIterable, Identifiable {
+    case blue, purple, orange, green, red
+    var id: Self { self }
+    
+    var color: Color {
+        switch self {
+        case .blue: return .blue
+        case .purple: return .purple
+        case .orange: return .orange
+        case .green: return .green
+        case .red: return .red
+        }
     }
 }

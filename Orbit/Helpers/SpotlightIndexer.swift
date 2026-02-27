@@ -164,4 +164,13 @@ final class SpotlightIndexer {
 
         return parts.joined(separator: " · ")
     }
+    
+    func deleteAll() {
+        CSSearchableIndex.default().deleteAllSearchableItems { error in
+            if let error = error {
+                print("Failed to delete Spotlight index: \(error.localizedDescription)")
+            }
+        }
+    }
 }
+

@@ -11,6 +11,8 @@ import SwiftData
 // 3. Autocomplete suggestions appear based on current token context
 // 4. On submit, the parser resolves a ParsedCommand
 // 5. CommandExecutor performs the action against SwiftData
+//
+// FIX 2: Autocomplete now inserts @"Name" for multi-word contact names.
 
 struct CommandPaletteView: View {
     @Environment(\.modelContext) private var modelContext
@@ -211,7 +213,12 @@ struct CommandPaletteView: View {
 
     private func tokenDisplayText(_ token: Token) -> String {
         switch token.kind {
-        case .entity: return "@\(token.value)"
+        case .entity:
+            // FIX 2: Show quoted form if name contains spaces
+            if token.value.contains(" ") {
+                return "@\"\(token.value)\""
+            }
+            return "@\(token.value)"
         case .impulse: return "!\(token.value)"
         case .tag: return "#\(token.value)"
         case .constellation: return "*\(token.value)"
@@ -274,6 +281,7 @@ struct CommandPaletteView: View {
 
             Group {
                 syntaxHelpRow("@Sarah !Coffee", "Log a coffee with Sarah")
+                syntaxHelpRow("@\"Sarah Connor\" !Coffee", "Multi-word names use quotes")
                 syntaxHelpRow("@Tom > likes + Jazz", "Add Jazz to Tom's likes")
                 syntaxHelpRow("@Tom > likes - Jazz", "Remove Jazz from Tom's likes")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
@@ -327,6 +335,24 @@ struct CommandPaletteView: View {
         }
     }
 
+    /// FIX 2: Helper to format a contact name for insertion.
+    /// Wraps in quotes if name contains spaces.
+    private func formattedEntityInsertion(for name: String) -> String {
+        if name.contains(" ") {
+            return "@\"\(name)\" "
+        }
+        return "@\(name) "
+    }
+
+    /// FIX 2: Helper to format a constellation name for insertion.
+    private func formattedConstellationInsertion(for name: String, removal: Bool) -> String {
+        let prefix = removal ? "*-" : "*"
+        if name.contains(" ") {
+            return "\(prefix)\"\(name)\" "
+        }
+        return "\(prefix)\(name) "
+    }
+
     private func updateSuggestions() {
         suggestions = []
 
@@ -344,7 +370,7 @@ struct CommandPaletteView: View {
                     CommandSuggestion(
                         icon: "person",
                         label: contact.name,
-                        insertion: "@\(contact.name) ",
+                        insertion: formattedEntityInsertion(for: contact.name),
                         kind: .contact
                     )
                 }
@@ -384,7 +410,6 @@ struct CommandPaletteView: View {
             let rawValue = lastToken.value
             let isRemoval = rawValue.hasPrefix("-")
             let prefix = (isRemoval ? String(rawValue.dropFirst()) : rawValue).lowercased()
-            let removePrefix = isRemoval ? "*-" : "*"
             suggestions = constellations
                 .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
                 .prefix(6)
@@ -392,7 +417,7 @@ struct CommandPaletteView: View {
                     CommandSuggestion(
                         icon: "star.circle",
                         label: (isRemoval ? "Remove from " : "") + constellation.name,
-                        insertion: "\(removePrefix)\(constellation.name) ",
+                        insertion: formattedConstellationInsertion(for: constellation.name, removal: isRemoval),
                         kind: .constellation
                     )
                 }
@@ -422,10 +447,8 @@ struct CommandPaletteView: View {
 
     private func applySuggestion(_ suggestion: CommandSuggestion) {
         // Replace the text from the last operator to the cursor with the suggestion
-        // For simplicity in Phase 1, we replace based on the suggestion kind
         switch suggestion.kind {
         case .contact:
-            // Replace everything up to and including the @token
             if let range = inputText.range(of: "@", options: .backwards) {
                 inputText = String(inputText[inputText.startIndex..<range.lowerBound]) + suggestion.insertion
             }

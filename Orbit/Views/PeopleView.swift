@@ -4,12 +4,9 @@ import SwiftData
 // MARK: - PeopleView
 // The single primary view for browsing, searching, and monitoring contacts.
 // Merges the previous Dashboard, ContactListView, and ReviewDashboardView into
-// one unified surface. Contacts are grouped by orbit zone by default, with
-// inline attention signals (drifting contacts, upcoming dates) surfaced at
-// the top when relevant.
+// one unified surface.
 //
-// Tags shown here are aggregated from interactions — they reflect what you
-// DO with someone, not a label you assigned. Constellations handle grouping.
+// FIX 1: Explicit modelContext.save() after quickLog and archive toggle.
 
 struct PeopleView: View {
     @Environment(\.modelContext) private var modelContext
@@ -22,7 +19,6 @@ struct PeopleView: View {
     @Query(sort: [SortDescriptor(\Contact.name)])
     private var allContacts: [Contact]
 
-    // Tag registry — for filter chip display (tag names that exist)
     @Query(sort: [SortDescriptor(\Tag.name)])
     private var allTags: [Tag]
 
@@ -35,14 +31,15 @@ struct PeopleView: View {
     @State private var showAddContact = false
     @State private var groupMode: GroupMode = .orbit
     @State private var showArchived = false
-    @State private var showTableView = false
 
-    // Filters
-    @State private var filterTagName: String?      // filters by interaction tag
+    // View Style Toggle
+    enum ViewStyle { case list, table }
+    @State private var viewStyle: ViewStyle = .list
+
+    @State private var filterTagName: String?
     @State private var filterConstellation: Constellation?
     @State private var filterStatus: StatusFilter = .all
 
-    // Attention banner
     @State private var attentionExpanded = false
 
     enum GroupMode: String, CaseIterable {
@@ -67,7 +64,6 @@ struct PeopleView: View {
     private var filteredContacts: [Contact] {
         var result = activeContacts
 
-        // Search
         if !searchText.isEmpty {
             let query = searchText.lowercased()
             result = result.filter { contact in
@@ -80,17 +76,14 @@ struct PeopleView: View {
             }
         }
 
-        // Tag filter (checks interaction tags)
         if let tagName = filterTagName {
             result = result.filter { $0.hasInteractionTag(tagName) }
         }
 
-        // Constellation filter
         if let constellation = filterConstellation {
             result = result.filter { $0.constellations.contains(where: { $0.id == constellation.id }) }
         }
 
-        // Status filter
         switch filterStatus {
         case .all: break
         case .active:
@@ -104,7 +97,6 @@ struct PeopleView: View {
         return result
     }
 
-    /// Contacts grouped and sorted according to the current group mode
     private var groupedContacts: [(key: String, contacts: [Contact])] {
         switch groupMode {
         case .orbit:
@@ -149,8 +141,6 @@ struct PeopleView: View {
         }
     }
 
-    // MARK: - Attention Data
-
     private var driftingContacts: [Contact] {
         activeContacts
             .filter { $0.isDrifting }
@@ -169,15 +159,20 @@ struct PeopleView: View {
 
     var body: some View {
         Group {
-            if allContacts.isEmpty {
-                emptyState
-            } else {
-                VStack(spacing: 0) {
-                    summaryBar
-                    filterBar
-                    Divider()
-                    contactList
+            if viewStyle == .list {
+                if allContacts.isEmpty {
+                    emptyState
+                } else {
+                    VStack(spacing: 0) {
+                        summaryBar
+                        filterBar
+                        Divider()
+                        contactList
+                    }
                 }
+            } else {
+                // Pass the shared search text to TabularView
+                TabularView(searchText: $searchText)
             }
         }
         .navigationTitle("People")
@@ -195,13 +190,14 @@ struct PeopleView: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
+                .disabled(viewStyle == .table) // Optionally disable list-specific settings when in table mode
 
-                Button {
-                    showTableView = true
-                } label: {
-                    Image(systemName: "tablecells")
+                Picker("View Style", selection: $viewStyle) {
+                    Image(systemName: "list.bullet").tag(ViewStyle.list)
+                    Image(systemName: "tablecells").tag(ViewStyle.table)
                 }
-                .help("Table View")
+                .pickerStyle(.segmented)
+                .help("Toggle View Style")
 
                 Button {
                     showAddContact = true
@@ -216,28 +212,11 @@ struct PeopleView: View {
                     Image(systemName: "plus.circle")
                 }
                 .help("Quick Log (⌘K)")
-
-                Button {
-                    showSettings = true
-                } label: {
-                    Image(systemName: "gear")
-                }
-                .help("Settings")
             }
         }
         .sheet(isPresented: $showAddContact) {
             ContactFormSheet(mode: .add) { newContact in
                 selectedContact = newContact
-            }
-        }
-        .sheet(isPresented: $showTableView) {
-            NavigationStack {
-                TabularView()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showTableView = false }
-                        }
-                    }
             }
         }
     }
@@ -307,12 +286,11 @@ struct PeopleView: View {
         }
     }
 
-    // MARK: - Filter Bar (Status, Tags, Constellations)
+    // MARK: - Filter Bar
 
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: OrbitSpacing.xs) {
-                // Status filters
                 ForEach(StatusFilter.allCases, id: \.self) { status in
                     filterChip(
                         status.rawValue,
@@ -327,7 +305,6 @@ struct PeopleView: View {
                     dividerPill
                 }
 
-                // Interaction tag filters (from tag registry)
                 ForEach(allTags) { tag in
                     filterChip(
                         "#\(tag.name)",
@@ -338,7 +315,6 @@ struct PeopleView: View {
                     }
                 }
 
-                // Constellation filters
                 ForEach(allConstellations) { constellation in
                     filterChip(
                         "✦ \(constellation.name)",
@@ -413,6 +389,8 @@ struct PeopleView: View {
                                     } else {
                                         spotlightIndexer.index(contact: contact)
                                     }
+                                    // FIX 1: Explicit save
+                                    try? modelContext.save()
                                 }
                                 .tint(contact.isArchived ? .blue : .orange)
                             }
@@ -550,9 +528,11 @@ struct PeopleView: View {
         modelContext.insert(interaction)
         contact.refreshLastContactDate()
         spotlightIndexer.index(contact: contact)
+        // FIX 1: Explicit save
+        try? modelContext.save()
     }
 
-    // MARK: - Date Parsing (migrated from ReviewDashboardView)
+    // MARK: - Date Parsing
 
     private func findUpcomingDates(from contacts: [Contact]) -> [UpcomingDateItem] {
         var items: [UpcomingDateItem] = []
@@ -639,7 +619,6 @@ struct PeopleContactRow: View {
 
             Spacer()
 
-            // Show top aggregated interaction tags (what you do together)
             if !contact.aggregatedTags.isEmpty {
                 Text(contact.aggregatedTags.prefix(2).map { "#\($0.name)" }.joined(separator: " "))
                     .font(OrbitTypography.footnote)

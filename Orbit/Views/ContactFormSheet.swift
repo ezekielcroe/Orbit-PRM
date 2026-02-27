@@ -1,12 +1,8 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - ContactFormSheet (Phase 2)
-// Updates from Phase 1:
-// - Real-time duplicate detection as user types
-// - Validation warnings (near-duplicate names)
-// - Spotlight re-indexing on save
-// - Orbit zone description shown for context
+// MARK: - ContactFormSheet (Phase 2 + Fix 1)
+// FIX 1: Explicit modelContext.save() after creating or editing a contact.
 
 struct ContactFormSheet: View {
     @Environment(\.modelContext) private var modelContext
@@ -51,7 +47,6 @@ struct ContactFormSheet: View {
                 orbitSection
                 notesSection
 
-                // Validation warnings
                 if !validationIssues.isEmpty {
                     validationSection
                 }
@@ -75,14 +70,11 @@ struct ContactFormSheet: View {
         }
     }
 
-    // MARK: - Name Section
-
     private var nameSection: some View {
         Section {
             TextField("Name", text: $name)
                 .font(OrbitTypography.headline)
                 .onChange(of: name) { _, newValue in
-                    // Debounced validation
                     nameCheckTask?.cancel()
                     nameCheckTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(300))
@@ -96,8 +88,6 @@ struct ContactFormSheet: View {
         }
     }
 
-    // MARK: - Orbit Section
-
     private var orbitSection: some View {
         Section("Orbit Zone") {
             Picker("Target Orbit", selection: $targetOrbit) {
@@ -107,14 +97,12 @@ struct ContactFormSheet: View {
             }
             .pickerStyle(.menu)
 
-            // Zone description
             if let zone = OrbitZone.allZones.first(where: { $0.id == targetOrbit }) {
                 Text(zone.description)
                     .font(OrbitTypography.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            // Typographic weight preview
             HStack {
                 Text("Preview: ")
                     .font(OrbitTypography.caption)
@@ -125,14 +113,11 @@ struct ContactFormSheet: View {
             }
             .padding(.vertical, OrbitSpacing.xs)
 
-            // Cadence expectation
             Text("Expected cadence: \(cadenceDescription(for: targetOrbit))")
                 .font(OrbitTypography.footnote)
                 .foregroundStyle(.tertiary)
         }
     }
-
-    // MARK: - Notes Section
 
     private var notesSection: some View {
         Section("Notes (optional)") {
@@ -141,8 +126,6 @@ struct ContactFormSheet: View {
         }
     }
 
-    // MARK: - Validation Section
-
     private var validationSection: some View {
         Section {
             ForEach(validationIssues) { issue in
@@ -150,11 +133,9 @@ struct ContactFormSheet: View {
                     Image(systemName: issue.severity == .error ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(issue.severity == .error ? .red : .yellow)
                         .font(.caption)
-
                     VStack(alignment: .leading, spacing: 2) {
                         Text(issue.message)
                             .font(OrbitTypography.caption)
-
                         if let suggestion = issue.suggestion {
                             Text(suggestion)
                                 .font(OrbitTypography.footnote)
@@ -165,8 +146,6 @@ struct ContactFormSheet: View {
             }
         }
     }
-
-    // MARK: - Helpers
 
     private var isEditing: Bool {
         if case .edit = mode { return true }
@@ -183,11 +162,7 @@ struct ContactFormSheet: View {
     }
 
     private func validateName(_ name: String) {
-        let result = validator.validateContactName(
-            name,
-            excluding: editingContactID,
-            in: modelContext
-        )
+        let result = validator.validateContactName(name, excluding: editingContactID, in: modelContext)
         validationIssues = result.issues
     }
 
@@ -221,5 +196,8 @@ struct ContactFormSheet: View {
             spotlightIndexer.index(contact: contact)
             onSave?(contact)
         }
+
+        // FIX 1: Explicit save
+        try? modelContext.save()
     }
 }

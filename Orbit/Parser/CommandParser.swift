@@ -15,6 +15,12 @@ import Foundation
 //   > → artifact assignment
 //   ^ → time modifier
 //   "..." → quoted free text
+//
+// FIX 2: Multi-word name support
+// - @"Sarah Connor" — quoted form for explicit multi-word names
+// - @Sarah-Connor — hyphenated names work as before (no spaces)
+// - Autocomplete inserts quoted form when name contains spaces
+// - Error messages corrected for accuracy
 
 final class CommandParser {
 
@@ -32,7 +38,7 @@ final class CommandParser {
 
             switch char {
             case "@":
-                let token = readPrefixedToken(input: input, from: current, kind: .entity)
+                let token = readEntityToken(input: input, from: current)
                 tokens.append(token)
                 current = token.range.upperBound
 
@@ -126,9 +132,10 @@ final class CommandParser {
             return .invalid(reason: "Constellation command needs an action: *\(constellationName) !Action")
         }
 
-        // Must start with an entity
+        // Must have an entity (@contact)
+        // FIX 2: Improved error message — the @ token doesn't need to be first
         guard let entityToken = tokens.first(where: { $0.kind == .entity }) else {
-            return .invalid(reason: "Command must begin with @ContactName")
+            return .invalid(reason: "No contact specified. Use @Name (e.g., @Sarah or @\"Sarah Connor\")")
         }
 
         let contactName = entityToken.value
@@ -196,7 +203,59 @@ final class CommandParser {
 
     // MARK: - Private Tokenizer Helpers
 
-    /// Read a prefixed token (@Name, !Action, #Tag, ^yesterday)
+    /// FIX 2: Read an entity token with multi-word support.
+    /// Supports two forms:
+    ///   @"Sarah Connor"  — quoted multi-word name
+    ///   @Sarah           — single word (stops at space/operator)
+    ///   @Sarah-Connor    — hyphenated (no spaces, works as before)
+    private func readEntityToken(input: String, from start: String.Index) -> Token {
+        let afterAt = input.index(after: start)
+        let end = input.endIndex
+
+        guard afterAt < end else {
+            return Token(kind: .entity, value: "", range: start..<afterAt)
+        }
+
+        // Check for quoted form: @"Sarah Connor"
+        if input[afterAt] == "\"" {
+            let quoteStart = input.index(after: afterAt) // skip opening quote
+            var current = quoteStart
+
+            while current < end && input[current] != "\"" {
+                current = input.index(after: current)
+            }
+
+            let value = String(input[quoteStart..<current])
+
+            // Skip closing quote if present
+            if current < end && input[current] == "\"" {
+                current = input.index(after: current)
+            }
+
+            return Token(kind: .entity, value: value, range: start..<current)
+        }
+
+        // Unquoted form: consume until next operator character or end
+        // FIX 2: For @entity, we consume until the next sigil operator,
+        // trimming trailing whitespace. This allows "@Sarah Connor !Coffee"
+        // to parse correctly as entity="Sarah Connor" impulse="Coffee".
+        var current = afterAt
+
+        while current < end {
+            let char = input[current]
+            if isOperator(char) || char == "\"" {
+                break
+            }
+            current = input.index(after: current)
+        }
+
+        let rawValue = String(input[afterAt..<current])
+        let value = rawValue.trimmingCharacters(in: .whitespaces)
+
+        return Token(kind: .entity, value: value, range: start..<current)
+    }
+
+    /// Read a prefixed token (!Action, #Tag, ^yesterday)
     /// Accumulates characters after the prefix until whitespace or another operator.
     private func readPrefixedToken(input: String, from start: String.Index, kind: Token.Kind) -> Token {
         // Skip the operator character itself
@@ -256,11 +315,43 @@ final class CommandParser {
     }
 
     /// Read a constellation token: *GroupName or *-GroupName
-    /// The value includes the "-" prefix if present (for remove operations).
+    /// FIX 2: Also supports *"Group Name" quoted form for multi-word constellations
     private func readConstellationToken(input: String, from start: String.Index) -> Token {
-        var current = input.index(after: start) // Skip *
+        let afterStar = input.index(after: start) // Skip *
         let end = input.endIndex
 
+        guard afterStar < end else {
+            return Token(kind: .constellation, value: "", range: start..<afterStar)
+        }
+
+        // Check for removal prefix
+        var valueStart = afterStar
+        let isRemoval = input[afterStar] == "-"
+        if isRemoval && input.index(after: afterStar) < end {
+            valueStart = input.index(after: afterStar)
+        }
+
+        // Check for quoted form: *"Group Name" or *-"Group Name"
+        if valueStart < end && input[valueStart] == "\"" {
+            let quoteStart = input.index(after: valueStart)
+            var current = quoteStart
+
+            while current < end && input[current] != "\"" {
+                current = input.index(after: current)
+            }
+
+            let name = String(input[quoteStart..<current])
+            let value = isRemoval ? "-\(name)" : name
+
+            if current < end && input[current] == "\"" {
+                current = input.index(after: current)
+            }
+
+            return Token(kind: .constellation, value: value, range: start..<current)
+        }
+
+        // Unquoted: consume until space/operator
+        var current = afterStar
         while current < end {
             let char = input[current]
             if char == " " || char == "\t" || isOperator(char) {
@@ -269,8 +360,7 @@ final class CommandParser {
             current = input.index(after: current)
         }
 
-        let valueStart = input.index(after: start)
-        let value = String(input[valueStart..<current])
+        let value = String(input[afterStar..<current])
         return Token(kind: .constellation, value: value, range: start..<current)
     }
 

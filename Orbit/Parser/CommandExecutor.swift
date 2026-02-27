@@ -5,6 +5,9 @@ import SwiftData
 // Takes a ParsedCommand and executes it against the SwiftData ModelContext.
 // This is the bridge between the text parser and the data layer.
 // It returns a CommandResult so the UI can show confirmation or errors.
+//
+// FIX 1: Every mutation now ends with an explicit `try? context.save()`
+// to prevent data loss from non-deterministic SwiftData autosave.
 
 struct CommandResult {
     let success: Bool
@@ -81,6 +84,11 @@ final class CommandExecutor {
             result = CommandResult(success: false, message: reason, affectedContact: nil)
         }
 
+        // FIX 1: Explicit save after every mutation to prevent data loss
+        if result.success {
+            try? context.save()
+        }
+
         lastResult = result
         return result
     }
@@ -144,11 +152,14 @@ final class CommandExecutor {
             return CommandResult(success: false, message: "Contact '\(contactName)' not found.", affectedContact: nil)
         }
 
+        let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
+
         // Find existing artifact with this key, or create new
-        if let existing = contact.artifacts.first(where: { $0.searchableKey == key.lowercased() }) {
+        if let existing = contact.artifacts.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
             existing.setValue(value)
+            if let newCategory = parsedCategory { existing.category = newCategory }
         } else {
-            let artifact = Artifact(key: key, value: value)
+            let artifact = Artifact(key: parsedKey, value: value, category: parsedCategory)
             artifact.contact = contact
             context.insert(artifact)
         }
@@ -157,7 +168,7 @@ final class CommandExecutor {
 
         return CommandResult(
             success: true,
-            message: "Set \(contact.name)'s \(key) to \(value)",
+            message: "Set \(contact.name)'s \(parsedKey) to \(value)",
             affectedContact: contact
         )
     }

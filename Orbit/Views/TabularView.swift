@@ -3,11 +3,8 @@ import SwiftData
 
 // MARK: - TabularView
 // Spreadsheet-like view for auditing and batch operations on contacts.
-// From the spec: "Columns include Name, Orbit Zone, Last Contact Date, and Tags.
-// Users can sort by any column to audit specific metrics."
-//
-// Also supports batch operations: select multiple contacts and apply
-// a tag, change orbit zone, or archive in bulk.
+// Now features a sleek floating action bar for batch selections and
+// advanced constellation management.
 
 struct TabularView: View {
     @Environment(\.modelContext) private var modelContext
@@ -21,7 +18,9 @@ struct TabularView: View {
     @State private var showBatchAction = false
     @State private var filterOrbit: Int?
     @State private var showArchived = false
-    @State private var searchText = ""
+    
+    // Search text shared from PeopleView
+    @Binding var searchText: String
 
     enum SortColumn: String, CaseIterable {
         case name = "Name"
@@ -85,8 +84,14 @@ struct TabularView: View {
                 tableContent
             }
         }
-        .navigationTitle("Table View")
-        .searchable(text: $searchText, prompt: "Filter by name")
+        // The new Floating Action Bar for batch selections
+        .overlay(alignment: .bottom) {
+            if !selectedContacts.isEmpty {
+                floatingActionBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: selectedContacts.isEmpty)
         .sheet(isPresented: $showBatchAction) {
             BatchActionSheet(
                 selectedCount: selectedContacts.count,
@@ -100,76 +105,127 @@ struct TabularView: View {
 
     // MARK: - Filter Bar
 
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: OrbitSpacing.sm) {
-                Menu {
-                    Button("All Orbits") { filterOrbit = nil }
-                    Divider()
-                    ForEach(OrbitZone.allZones, id: \.id) { zone in
-                        Button(zone.name) { filterOrbit = zone.id }
+        private var filterBar: some View {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: OrbitSpacing.sm) {
+                    
+                    // 1. ADD THIS: iOS-only Sort Menu
+                    #if os(iOS)
+                    Menu {
+                        ForEach(SortColumn.allCases, id: \.self) { column in
+                            Button {
+                                if sortColumn == column {
+                                    sortAscending.toggle()
+                                } else {
+                                    sortColumn = column
+                                    sortAscending = true
+                                }
+                            } label: {
+                                if sortColumn == column {
+                                    Label(column.rawValue, systemImage: sortAscending ? "chevron.up" : "chevron.down")
+                                } else {
+                                    Text(column.rawValue)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Sort: \(sortColumn.rawValue)", systemImage: "arrow.up.arrow.down")
+                            .font(OrbitTypography.caption)
                     }
-                } label: {
-                    Label(
-                        filterOrbit != nil ? OrbitZone.name(for: filterOrbit!) : "All Orbits",
-                        systemImage: "circle.dotted"
-                    )
-                    .font(OrbitTypography.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Toggle("Archived", isOn: $showArchived)
-                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    #endif
+                    
+                    // Existing Orbit Filter
+                    Menu {
+                        Button("All Orbits") { filterOrbit = nil }
+                        Divider()
+                        ForEach(OrbitZone.allZones, id: \.id) { zone in
+                            Button(zone.name) { filterOrbit = zone.id }
+                        }
+                    } label: {
+                        Label(
+                            filterOrbit != nil ? OrbitZone.name(for: filterOrbit!) : "All Orbits",
+                            systemImage: "circle.dotted"
+                        )
+                        .font(OrbitTypography.caption)
+                    }
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
 
-                Spacer()
-
-                if !selectedContacts.isEmpty {
-                    Text("\(selectedContacts.count) selected")
-                        .font(OrbitTypography.captionMedium)
-                        .foregroundStyle(.secondary)
-
-                    Button("Batch Action") {
-                        showBatchAction = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    Button("Clear") {
-                        selectedContacts.removeAll()
-                    }
-                    .controlSize(.small)
+                    // Existing Archived Toggle
+                    Toggle("Archived", isOn: $showArchived)
+                        .toggleStyle(.button)
+                        .controlSize(.small)
                 }
-
-                Button(selectedContacts.count == filteredAndSorted.count ? "Deselect All" : "Select All") {
-                    if selectedContacts.count == filteredAndSorted.count {
-                        selectedContacts.removeAll()
-                    } else {
-                        selectedContacts = Set(filteredAndSorted.map(\.id))
-                    }
-                }
-                .controlSize(.small)
+                .padding(.horizontal, OrbitSpacing.md)
+                .padding(.vertical, OrbitSpacing.sm)
             }
-            .padding(.horizontal, OrbitSpacing.md)
-            .padding(.vertical, OrbitSpacing.sm)
         }
+
+    // MARK: - Floating Action Bar
+
+    private var floatingActionBar: some View {
+        HStack(spacing: OrbitSpacing.md) {
+            Text("\(selectedContacts.count) selected")
+                .font(OrbitTypography.captionMedium)
+                .foregroundStyle(.primary)
+            
+            Divider()
+                .frame(height: 16)
+            
+            Button("Select All") {
+                selectedContacts = Set(filteredAndSorted.map(\.id))
+            }
+            .font(OrbitTypography.caption)
+            .foregroundStyle(.blue)
+            
+            Spacer()
+            
+            Button {
+                selectedContacts.removeAll()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Button {
+                showBatchAction = true
+            } label: {
+                Label("Batch Actions", systemImage: "sparkles")
+                    .font(OrbitTypography.captionMedium)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .controlSize(.regular)
+        }
+        .padding(.horizontal, OrbitSpacing.lg)
+        .padding(.vertical, OrbitSpacing.sm)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+        .padding(.bottom, OrbitSpacing.lg)
     }
 
     // MARK: - Table Content
 
-    private var tableContent: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                tableHeaderRow
-                Divider()
-                ForEach(filteredAndSorted) { contact in
-                    tableDataRow(contact: contact)
+        private var tableContent: some View {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    
+                    #if os(macOS)
+                    tableHeaderRow
                     Divider()
+                    #endif
+                    
+                    ForEach(filteredAndSorted) { contact in
+                        tableDataRow(contact: contact)
+                        Divider()
+                    }
                 }
+                .padding(.bottom, selectedContacts.isEmpty ? 0 : 80)
             }
         }
-    }
 
     private var tableHeaderRow: some View {
         HStack(spacing: 0) {
@@ -217,8 +273,7 @@ struct TabularView: View {
         return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
             HStack {
                 Button {
-                    if isSelected { selectedContacts.remove(contact.id) }
-                    else { selectedContacts.insert(contact.id) }
+                    toggleSelection(for: contact.id)
                 } label: {
                     Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                         .foregroundStyle(isSelected ? .blue : .secondary)
@@ -247,14 +302,12 @@ struct TabularView: View {
         .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
-            if isSelected { selectedContacts.remove(contact.id) }
-            else { selectedContacts.insert(contact.id) }
+            toggleSelection(for: contact.id)
         }
         #else
         return HStack(spacing: 0) {
             Button {
-                if isSelected { selectedContacts.remove(contact.id) }
-                else { selectedContacts.insert(contact.id) }
+                toggleSelection(for: contact.id)
             } label: {
                 Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                     .foregroundStyle(isSelected ? .blue : .secondary)
@@ -291,13 +344,22 @@ struct TabularView: View {
         .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
-            if isSelected { selectedContacts.remove(contact.id) }
-            else { selectedContacts.insert(contact.id) }
+            toggleSelection(for: contact.id)
         }
         #endif
     }
+    
+    private func toggleSelection(for id: UUID) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if selectedContacts.contains(id) {
+                selectedContacts.remove(id)
+            } else {
+                selectedContacts.insert(id)
+            }
+        }
+    }
 
-    // MARK: - Batch Actions
+    // MARK: - Batch Actions Implementation
 
     private func applyBatchAction(_ action: BatchAction) {
         let descriptor = FetchDescriptor<Contact>()
@@ -323,25 +385,44 @@ struct TabularView: View {
                 contact.isArchived = false
                 contact.modifiedAt = Date()
             }
+            
+        case .addToConstellation(let constellation):
+            for contact in targets {
+                if !contact.constellations.contains(where: { $0.id == constellation.id }) {
+                    contact.constellations.append(constellation)
+                    contact.modifiedAt = Date()
+                }
+            }
+            
+        case .removeFromConstellation(let constellation):
+            for contact in targets {
+                contact.constellations.removeAll(where: { $0.id == constellation.id })
+                contact.modifiedAt = Date()
+            }
         }
 
-        selectedContacts.removeAll()
+        try? modelContext.save()
+        withAnimation {
+            selectedContacts.removeAll()
+        }
     }
 }
 
 // MARK: - Batch Action Types
-// "Add Tag" removed — tags are interaction-level data, not contact-level labels.
-
 enum BatchAction {
     case setOrbit(Int)
     case archive
     case restore
+    case addToConstellation(Constellation)
+    case removeFromConstellation(Constellation)
 }
 
 // MARK: - Batch Action Sheet
-
 struct BatchActionSheet: View {
     @Environment(\.dismiss) private var dismiss
+    
+    // Query constellations to populate the new batch menus
+    @Query(sort: \Constellation.name) private var constellations: [Constellation]
 
     let selectedCount: Int
     let onApply: (BatchAction) -> Void
@@ -359,12 +440,39 @@ struct BatchActionSheet: View {
                         }
                     }
                 }
+                
+                if !constellations.isEmpty {
+                    Section("Constellations") {
+                        Menu {
+                            ForEach(constellations) { constellation in
+                                Button(constellation.name) {
+                                    onApply(.addToConstellation(constellation))
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            Label("Add to Constellation...", systemImage: "star.fill")
+                        }
+                        
+                        Menu {
+                            ForEach(constellations) { constellation in
+                                Button(constellation.name) {
+                                    onApply(.removeFromConstellation(constellation))
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            Label("Remove from Constellation...", systemImage: "star.slash")
+                        }
+                    }
+                }
 
-                Section {
+                Section("Archive") {
                     Button("Archive Selected") {
                         onApply(.archive)
                         dismiss()
                     }
+                    .foregroundStyle(.orange)
 
                     Button("Restore Selected") {
                         onApply(.restore)

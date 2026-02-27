@@ -1,11 +1,13 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - ArtifactEditSheet (Phase 2)
-// Updates from Phase 1:
+// MARK: - ArtifactEditSheet (Phase 2 + Fix 3)
+// Updates:
 // - Date format validation for birthday/anniversary keys
 // - Spotlight re-indexing on save
 // - Improved common key suggestions based on existing artifacts
+// - FIX 1: Explicit modelContext.save() after mutations
+// - FIX 3: Category picker for manual category assignment
 
 struct ArtifactEditSheet: View {
     @Environment(\.modelContext) private var modelContext
@@ -23,10 +25,17 @@ struct ArtifactEditSheet: View {
     @State private var newArrayItem: String = ""
     @State private var validationWarning: String?
 
+    // FIX 3: Category state
+    @State private var category: String = ""
+    @State private var useCustomCategory: Bool = false
+
     enum Mode {
         case add
         case edit(Artifact)
     }
+
+    // FIX 3: Available categories for the picker
+    private let standardCategories = ["Contact Info", "Personal", "Professional", "Other"]
 
     init(contact: Contact, mode: Mode) {
         self.contact = contact
@@ -38,6 +47,8 @@ struct ArtifactEditSheet: View {
             _value = State(initialValue: "")
             _isArray = State(initialValue: false)
             _arrayItems = State(initialValue: [])
+            _category = State(initialValue: "")
+            _useCustomCategory = State(initialValue: false)
         case .edit(let artifact):
             _key = State(initialValue: artifact.key)
             _isArray = State(initialValue: artifact.isArray)
@@ -48,6 +59,10 @@ struct ArtifactEditSheet: View {
                 _value = State(initialValue: artifact.value)
                 _arrayItems = State(initialValue: [])
             }
+            // FIX 3: Pre-populate category from existing artifact
+            let existingCategory = artifact.category ?? ""
+            _category = State(initialValue: existingCategory)
+            _useCustomCategory = State(initialValue: !existingCategory.isEmpty && !["Contact Info", "Personal", "Professional", "Other"].contains(existingCategory))
         }
     }
 
@@ -66,10 +81,53 @@ struct ArtifactEditSheet: View {
                             if listKeys.contains(newKey.lowercased()) && !isEditing {
                                 isArray = true
                             }
+
+                            // FIX 3: Auto-suggest category based on key
+                            if category.isEmpty {
+                                let autoCategory = autoCategoryForKey(newKey)
+                                if autoCategory != "Other" {
+                                    category = autoCategory
+                                }
+                            }
                         }
 
                     if case .add = mode {
                         commonKeySuggestions
+                    }
+                }
+
+                // FIX 3: Category section
+                Section("Category") {
+                    if useCustomCategory {
+                        TextField("Custom category name", text: $category)
+                            .autocorrectionDisabled()
+                        Button("Use standard category") {
+                            useCustomCategory = false
+                            category = autoCategoryForKey(key)
+                        }
+                        .font(OrbitTypography.footnote)
+                    } else {
+                        Picker("Category", selection: $category) {
+                            Text("Auto-detect").tag("")
+                            ForEach(standardCategories, id: \.self) { cat in
+                                Text(cat).tag(cat)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        Button("Use custom category") {
+                            useCustomCategory = true
+                            if category.isEmpty {
+                                category = ""
+                            }
+                        }
+                        .font(OrbitTypography.footnote)
+                    }
+
+                    if category.isEmpty {
+                        Text("Will auto-detect from key: \(autoCategoryForKey(key))")
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -211,6 +269,28 @@ struct ArtifactEditSheet: View {
         validationWarning = result.issues.first?.message
     }
 
+    // MARK: - FIX 3: Auto-category based on key name
+
+    private func autoCategoryForKey(_ key: String) -> String {
+        let k = key.lowercased()
+        let contactInfoKeys = ["email", "phone", "address", "city", "location",
+                               "website", "social", "instagram", "twitter",
+                               "linkedin", "github", "country"]
+        let personalKeys = ["birthday", "anniversary", "born", "dob", "spouse",
+                            "wife", "husband", "partner", "children", "kids",
+                            "likes", "dislikes", "hobbies", "interests",
+                            "allergies", "pronouns", "hometown", "zodiac",
+                            "nickname", "pet", "pets", "favorite"]
+        let professionalKeys = ["company", "role", "title", "job", "department",
+                                "team", "met_at", "school", "university",
+                                "org", "organization", "industry"]
+
+        if contactInfoKeys.contains(where: { k.contains($0) }) { return "Contact Info" }
+        if personalKeys.contains(where: { k.contains($0) }) { return "Personal" }
+        if professionalKeys.contains(where: { k.contains($0) }) { return "Professional" }
+        return "Other"
+    }
+
     // MARK: - Actions
 
     private var isEditing: Bool {
@@ -227,10 +307,15 @@ struct ArtifactEditSheet: View {
 
     private func save() {
         let trimmedKey = key.trimmingCharacters(in: .whitespaces)
+        // FIX 3: Resolve the category — use explicit if set, otherwise auto-detect
+        let resolvedCategory: String? = {
+            if !category.isEmpty { return category }
+            return nil // Let ContactDetailView auto-categorize if no explicit category
+        }()
 
         switch mode {
         case .add:
-            let artifact = Artifact(key: trimmedKey, value: "", isArray: isArray)
+            let artifact = Artifact(key: trimmedKey, value: "", isArray: isArray, category: resolvedCategory)
             artifact.contact = contact
             modelContext.insert(artifact)
 
@@ -245,6 +330,8 @@ struct ArtifactEditSheet: View {
         case .edit(let artifact):
             artifact.key = trimmedKey
             artifact.searchableKey = trimmedKey.lowercased()
+            // FIX 3: Save category
+            artifact.category = resolvedCategory
 
             if isArray {
                 artifact.isArray = true
@@ -262,6 +349,9 @@ struct ArtifactEditSheet: View {
 
         contact.modifiedAt = Date()
         spotlightIndexer.index(contact: contact)
+
+        // FIX 1: Explicit save
+        try? modelContext.save()
     }
 
     private func deleteArtifact() {
@@ -269,6 +359,8 @@ struct ArtifactEditSheet: View {
             modelContext.delete(artifact)
             contact.modifiedAt = Date()
             spotlightIndexer.index(contact: contact)
+            // FIX 1: Explicit save
+            try? modelContext.save()
         }
     }
 }

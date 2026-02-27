@@ -1,10 +1,6 @@
 //
-//  FlowLayout.swift
+//  SharedComponents.swift
 //  Orbit
-//
-//  Created by Zhi Zheng Yeo on 19/2/26.
-//
-
 
 import SwiftUI
 
@@ -59,6 +55,8 @@ struct FlowLayout: Layout {
 }
 
 // MARK: - ArtifactRowView
+// FIX 3: Uses flexible label width with alignment instead of fixed 100pt.
+// Long keys no longer truncate.
 
 struct ArtifactRowView: View {
     let artifact: Artifact
@@ -68,7 +66,8 @@ struct ArtifactRowView: View {
             Text(artifact.key)
                 .font(OrbitTypography.artifactKey)
                 .foregroundStyle(.secondary)
-                .frame(width: 100, alignment: .trailing)
+                .frame(minWidth: 60, alignment: .trailing)
+                .lineLimit(2)
 
             if artifact.isArray {
                 VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
@@ -83,14 +82,21 @@ struct ArtifactRowView: View {
             }
 
             Spacer()
+
+            // FIX 3: Show category badge if explicitly set
+            if let category = artifact.category, !category.isEmpty {
+                Text(category)
+                    .font(OrbitTypography.footnote)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
         .padding(.vertical, OrbitSpacing.xs)
     }
 }
 
 // MARK: - InteractionRowView
-// Phase 2.5: Uses interaction.interactionTagNames (renamed from tagNames
-// to avoid confusion with the removed Contact.tags relationship).
+// Phase 2.5: Uses interaction.tagNames (interaction-level tags).
 
 struct InteractionRowView: View {
     let interaction: Interaction
@@ -125,7 +131,13 @@ struct InteractionRowView: View {
             }
 
             Spacer()
+
+            // FIX 5: Chevron hint that row is tappable
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.quaternary)
         }
         .padding(.vertical, OrbitSpacing.xs)
+        .contentShape(Rectangle())
     }
 }

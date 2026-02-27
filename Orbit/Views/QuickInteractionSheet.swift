@@ -1,8 +1,8 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - QuickInteractionSheet (Phase 2)
-// Update: Re-indexes contact in Spotlight after logging an interaction.
+// MARK: - QuickInteractionSheet (Phase 2 + Fix 1)
+// FIX 1: Explicit modelContext.save() after logging an interaction.
 
 struct QuickInteractionSheet: View {
     @Environment(\.modelContext) private var modelContext
@@ -15,7 +15,7 @@ struct QuickInteractionSheet: View {
     @State private var content = ""
     @State private var date = Date()
 
-    private let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
+    private let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Walk", "Play"]
 
     var body: some View {
         NavigationStack {
@@ -73,5 +73,7 @@ struct QuickInteractionSheet: View {
         modelContext.insert(interaction)
         contact.refreshLastContactDate()
         spotlightIndexer.index(contact: contact)
+        // FIX 1: Explicit save
+        try? modelContext.save()
     }
 }
