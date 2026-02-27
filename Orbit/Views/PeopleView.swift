@@ -1,12 +1,23 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Row Geometry Tracking for Drag-to-Select
+struct RowFrameData: Equatable {
+    let id: UUID
+    let frame: CGRect
+}
+
+struct RowFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [RowFrameData] = []
+    static func reduce(value: inout [RowFrameData], nextValue: () -> [RowFrameData]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
 // MARK: - PeopleView
 // The single primary view for browsing, searching, and monitoring contacts.
-// Merges the previous Dashboard, ContactListView, and ReviewDashboardView into
-// one unified surface.
-//
-// FIX 1: Explicit modelContext.save() after quickLog and archive toggle.
+// Now entirely tabular, featuring drag-to-select, a bottom-docked control panel,
+// and a floating Quick Action pill.
 
 struct PeopleView: View {
     @Environment(\.modelContext) private var modelContext
@@ -18,201 +29,156 @@ struct PeopleView: View {
 
     @Query(sort: [SortDescriptor(\Contact.name)])
     private var allContacts: [Contact]
-
-    @Query(sort: [SortDescriptor(\Tag.name)])
+    
+    @Query(sort: \Constellation.name)
+    private var allConstellations: [Constellation]
+    
+    @Query(sort: \Tag.name)
     private var allTags: [Tag]
 
-    @Query(sort: [SortDescriptor(\Constellation.name)])
-    private var allConstellations: [Constellation]
-
-    // MARK: - State
-
+    // Navigation and Sort State
     @State private var searchText = ""
+    @State private var sortColumn: SortColumn = .name
+    @State private var sortAscending = true
+    @State private var selectedContacts: Set<UUID> = []
+    @State private var showBatchAction = false
     @State private var showAddContact = false
-    @State private var groupMode: GroupMode = .orbit
+    
+    // Filter State
+    @State private var filterOrbit: Int?
+    @State private var filterConstellation: Constellation?
+    @State private var filterTag: Tag?
+    @State private var filterInteractions: ActivityFilter = .any
+    @State private var filterArtifacts: ArtifactFilter = .any
     @State private var showArchived = false
 
-    // View Style Toggle
-    enum ViewStyle { case list, table }
-    @State private var viewStyle: ViewStyle = .list
+    // Drag-to-select State
+    @State private var rowFrames: [RowFrameData] = []
+    @State private var dragSelectionState: Bool? = nil
+    @State private var isScrubbing = false
 
-    @State private var filterTagName: String?
-    @State private var filterConstellation: Constellation?
-    @State private var filterStatus: StatusFilter = .all
-
-    @State private var attentionExpanded = false
-
-    enum GroupMode: String, CaseIterable {
+    enum SortColumn: String, CaseIterable {
+        case name = "Name"
         case orbit = "Orbit"
-        case alphabetical = "A–Z"
-        case recent = "Recent"
+        case constellation = "Constellation"
+        case lastContact = "Last Contact"
     }
 
-    enum StatusFilter: String, CaseIterable {
-        case all = "All"
-        case active = "Active"
-        case drifting = "Drifting"
-        case neglected = "New"
+    enum ActivityFilter: String, CaseIterable {
+        case any = "Any Activity"
+        case hasLogs = "Has Logs"
+        case noLogs = "No Logs"
     }
 
-    // MARK: - Computed Data
-
-    private var activeContacts: [Contact] {
-        showArchived ? allContacts : allContacts.filter { !$0.isArchived }
+    enum ArtifactFilter: String, CaseIterable {
+        case any = "Any Artifacts"
+        case hasArtifacts = "Has Artifacts"
+        case noArtifacts = "No Artifacts"
     }
 
-    private var filteredContacts: [Contact] {
-        var result = activeContacts
+    private var filteredAndSorted: [Contact] {
+        var result = allContacts
+
+        if !showArchived {
+            result = result.filter { !$0.isArchived }
+        }
+
+        if let orbit = filterOrbit {
+            result = result.filter { $0.targetOrbit == orbit }
+        }
+        
+        if let const = filterConstellation {
+            result = result.filter { $0.constellations.contains(where: { $0.id == const.id }) }
+        }
+        
+        if let tag = filterTag {
+            result = result.filter { $0.hasInteractionTag(tag.searchableName) }
+        }
+        
+        if filterInteractions == .hasLogs {
+            result = result.filter { !$0.activeInteractions.isEmpty }
+        } else if filterInteractions == .noLogs {
+            result = result.filter { $0.activeInteractions.isEmpty }
+        }
+        
+        if filterArtifacts == .hasArtifacts {
+            result = result.filter { !$0.artifacts.isEmpty }
+        } else if filterArtifacts == .noArtifacts {
+            result = result.filter { $0.artifacts.isEmpty }
+        }
 
         if !searchText.isEmpty {
             let query = searchText.lowercased()
-            result = result.filter { contact in
-                contact.searchableName.contains(query)
-                    || contact.tagNames.contains(where: { $0.contains(query) })
-                    || contact.artifacts.contains(where: {
-                        $0.value.lowercased().contains(query)
-                        || $0.searchableKey.contains(query)
-                    })
+            result = result.filter { $0.searchableName.contains(query) }
+        }
+
+        result.sort { a, b in
+            let comparison: Bool
+            switch sortColumn {
+            case .name:
+                comparison = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            case .orbit:
+                comparison = a.targetOrbit < b.targetOrbit
+            case .constellation:
+                let aConst = a.constellations.first?.name ?? "zzzz"
+                let bConst = b.constellations.first?.name ?? "zzzz"
+                comparison = aConst.localizedCaseInsensitiveCompare(bConst) == .orderedAscending
+            case .lastContact:
+                comparison = (a.lastContactDate ?? .distantPast) > (b.lastContactDate ?? .distantPast)
             }
-        }
-
-        if let tagName = filterTagName {
-            result = result.filter { $0.hasInteractionTag(tagName) }
-        }
-
-        if let constellation = filterConstellation {
-            result = result.filter { $0.constellations.contains(where: { $0.id == constellation.id }) }
-        }
-
-        switch filterStatus {
-        case .all: break
-        case .active:
-            result = result.filter { ($0.daysSinceLastContact ?? 999) <= 14 }
-        case .drifting:
-            result = result.filter { $0.isDrifting }
-        case .neglected:
-            result = result.filter { $0.lastContactDate == nil && $0.targetOrbit < 4 }
+            return sortAscending ? comparison : !comparison
         }
 
         return result
     }
 
-    private var groupedContacts: [(key: String, contacts: [Contact])] {
-        switch groupMode {
-        case .orbit:
-            let grouped = Dictionary(grouping: filteredContacts) { $0.targetOrbit }
-            return OrbitZone.allZones.compactMap { zone in
-                guard let contacts = grouped[zone.id], !contacts.isEmpty else { return nil }
-                return (key: zone.name, contacts: contacts.sorted {
-                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                })
-            }
-
-        case .alphabetical:
-            let sorted = filteredContacts.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-            let grouped = Dictionary(grouping: sorted) { contact in
-                String(contact.name.prefix(1)).uppercased()
-            }
-            return grouped
-                .sorted { $0.key < $1.key }
-                .map { (key: $0.key, contacts: $0.value) }
-
-        case .recent:
-            let sorted = filteredContacts.sorted {
-                ($0.lastContactDate ?? .distantPast) > ($1.lastContactDate ?? .distantPast)
-            }
-            let grouped = Dictionary(grouping: sorted) { contact -> String in
-                guard let days = contact.daysSinceLastContact else { return "Never Contacted" }
-                switch days {
-                case 0...7: return "This Week"
-                case 8...30: return "This Month"
-                case 31...90: return "This Quarter"
-                case 91...365: return "This Year"
-                default: return "Over a Year"
-                }
-            }
-            let order = ["This Week", "This Month", "This Quarter", "This Year", "Over a Year", "Never Contacted"]
-            return order.compactMap { key in
-                guard let contacts = grouped[key], !contacts.isEmpty else { return nil }
-                return (key: key, contacts: contacts)
-            }
-        }
-    }
-
-    private var driftingContacts: [Contact] {
-        activeContacts
-            .filter { $0.isDrifting }
-            .sorted { $0.driftPriority > $1.driftPriority }
-    }
-
-    private var upcomingDates: [UpcomingDateItem] {
-        findUpcomingDates(from: activeContacts)
-    }
-
-    private var activeIn7Days: Int {
-        activeContacts.filter { ($0.daysSinceLastContact ?? 999) <= 7 }.count
-    }
-
-    // MARK: - Body
-
     var body: some View {
-        Group {
-            if viewStyle == .list {
-                if allContacts.isEmpty {
-                    emptyState
+            // Use a ZStack so the ScrollView can take the full screen
+            // while the bottom bar and pill handle their own safe areas.
+            ZStack(alignment: .bottom) {
+                if filteredAndSorted.isEmpty {
+                    ContentUnavailableView(
+                        "No Matching Contacts",
+                        systemImage: "tablecells",
+                        description: Text("Adjust your filters or add contacts.")
+                    )
+                    .frame(maxHeight: .infinity)
                 } else {
-                    VStack(spacing: 0) {
-                        summaryBar
-                        filterBar
-                        Divider()
-                        contactList
-                    }
+                    tableContent
                 }
-            } else {
-                // Pass the shared search text to TabularView
-                TabularView(searchText: $searchText)
             }
-        }
-        .navigationTitle("People")
-        .searchable(text: $searchText, prompt: "Search contacts, tags, or artifacts")
-        .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                Menu {
-                    Picker("Group by", selection: $groupMode) {
-                        ForEach(GroupMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
-                        }
-                    }
-                    Divider()
-                    Toggle("Show Archived", isOn: $showArchived)
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                }
-                .disabled(viewStyle == .table) // Optionally disable list-specific settings when in table mode
-
-                Picker("View Style", selection: $viewStyle) {
-                    Image(systemName: "list.bullet").tag(ViewStyle.list)
-                    Image(systemName: "tablecells").tag(ViewStyle.table)
-                }
-                .pickerStyle(.segmented)
-                .help("Toggle View Style")
-
-                Button {
-                    showAddContact = true
-                } label: {
-                    Image(systemName: "person.badge.plus")
-                }
-                .help("Add Contact")
-
-                Button {
-                    showCommandPalette = true
-                } label: {
-                    Image(systemName: "plus.circle")
-                }
-                .help("Quick Log (⌘K)")
+            .navigationTitle("People")
+            // 1. USE SAFE AREA INSET instead of a fixed VStack footer.
+            // This automatically pads the ScrollView so the last row stops ABOVE the controls.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomControls
             }
+            // 2. Overlays stay pinned to the bottom of the screen.
+            .overlay(alignment: .bottomTrailing) {
+                if selectedContacts.isEmpty {
+                    floatingToolbarPill
+                        .transition(.scale.combined(with: .opacity))
+                        .padding(.trailing, OrbitSpacing.lg)
+                        // Pinned high enough to clear the safeAreaInset controls
+                        .padding(.bottom, 180)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if !selectedContacts.isEmpty {
+                    floatingActionBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, OrbitSpacing.xl)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: selectedContacts.isEmpty)
+        .sheet(isPresented: $showBatchAction) {
+            BatchActionSheet(
+                selectedCount: selectedContacts.count,
+                onApply: { action in
+                    applyBatchAction(action)
+                    showBatchAction = false
+                }
+            )
         }
         .sheet(isPresented: $showAddContact) {
             ContactFormSheet(mode: .add) { newContact in
@@ -221,439 +187,565 @@ struct PeopleView: View {
         }
     }
 
-    // MARK: - Summary Bar
+    // MARK: - Table Content
 
-    private var summaryBar: some View {
-        HStack(spacing: OrbitSpacing.lg) {
-            summaryItem(count: activeContacts.count, label: "Contacts", icon: "person.2")
-            summaryItem(count: activeIn7Days, label: "Active (7d)", icon: "checkmark.circle")
-
-            if !driftingContacts.isEmpty {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        attentionExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: OrbitSpacing.xs) {
-                        Image(systemName: "exclamationmark.circle")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                        Text("\(driftingContacts.count)")
-                            .font(OrbitTypography.captionMedium)
-                            .foregroundStyle(.orange)
-                        Text("Need attention")
-                            .font(OrbitTypography.footnote)
-                            .foregroundStyle(.orange.opacity(0.7))
-                        Image(systemName: attentionExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.orange.opacity(0.5))
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-
-            if !upcomingDates.isEmpty {
-                let soonCount = upcomingDates.filter { $0.daysUntil <= 7 }.count
-                if soonCount > 0 {
-                    HStack(spacing: OrbitSpacing.xs) {
-                        Image(systemName: "calendar")
-                            .font(.caption2)
-                            .foregroundStyle(.cyan)
-                        Text("\(soonCount) upcoming")
-                            .font(OrbitTypography.footnote)
-                            .foregroundStyle(.cyan)
-                    }
-                }
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, OrbitSpacing.md)
-        .padding(.vertical, OrbitSpacing.sm)
-    }
-
-    private func summaryItem(count: Int, label: String, icon: String) -> some View {
-        HStack(spacing: OrbitSpacing.xs) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(OrbitTypography.captionMedium)
-                .foregroundStyle(.secondary)
-            Text(label)
-                .font(OrbitTypography.footnote)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    // MARK: - Filter Bar
-
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: OrbitSpacing.xs) {
-                ForEach(StatusFilter.allCases, id: \.self) { status in
-                    filterChip(
-                        status.rawValue,
-                        isActive: filterStatus == status,
-                        color: status == .drifting ? .orange : nil
-                    ) {
-                        filterStatus = (filterStatus == status && status != .all) ? .all : status
-                    }
-                }
-
-                if !allTags.isEmpty || !allConstellations.isEmpty {
-                    dividerPill
-                }
-
-                ForEach(allTags) { tag in
-                    filterChip(
-                        "#\(tag.name)",
-                        isActive: filterTagName == tag.searchableName,
-                        color: OrbitColors.syntaxTag
-                    ) {
-                        filterTagName = (filterTagName == tag.searchableName) ? nil : tag.searchableName
-                    }
-                }
-
-                ForEach(allConstellations) { constellation in
-                    filterChip(
-                        "✦ \(constellation.name)",
-                        isActive: filterConstellation?.id == constellation.id,
-                        color: .purple
-                    ) {
-                        filterConstellation = (filterConstellation?.id == constellation.id) ? nil : constellation
-                    }
-                }
-            }
-            .padding(.horizontal, OrbitSpacing.md)
-            .padding(.vertical, OrbitSpacing.sm)
-        }
-    }
-
-    private var dividerPill: some View {
-        Rectangle()
-            .fill(.quaternary)
-            .frame(width: 1, height: 16)
-            .padding(.horizontal, OrbitSpacing.xs)
-    }
-
-    private func filterChip(_ label: String, isActive: Bool, color: Color? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(OrbitTypography.footnote)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    isActive
-                        ? (color ?? Color.primary).opacity(0.12)
-                        : Color.secondary.opacity(0.06),
-                    in: Capsule()
-                )
-                .foregroundStyle(isActive ? (color ?? .primary) : .secondary)
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Contact List
-
-    private var contactList: some View {
-        List(selection: $selectedContact) {
-            if attentionExpanded && !driftingContacts.isEmpty {
-                attentionSection
-            }
-
-            if upcomingDates.contains(where: { $0.daysUntil <= 7 }) {
-                upcomingSection
-            }
-
-            ForEach(groupedContacts, id: \.key) { group in
-                Section {
-                    ForEach(group.contacts) { contact in
-                        PeopleContactRow(contact: contact)
-                            .tag(contact)
-                            .swipeActions(edge: .leading) {
-                                Button {
-                                    selectedContact = contact
-                                    showCommandPalette = true
-                                } label: {
-                                    Label("Log", systemImage: "plus.bubble")
+    private var tableContent: some View {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    #if os(macOS)
+                    tableHeaderRow
+                    Divider()
+                    #endif
+                    
+                    ForEach(filteredAndSorted) { contact in
+                        tableDataRow(contact: contact)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: RowFramePreferenceKey.self,
+                                        value: [RowFrameData(id: contact.id, frame: geo.frame(in: .named("TableSpace")))]
+                                    )
                                 }
-                                .tint(.blue)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(contact.isArchived ? "Restore" : "Archive") {
-                                    contact.isArchived.toggle()
-                                    contact.modifiedAt = Date()
-                                    if contact.isArchived {
-                                        spotlightIndexer.deindex(contact: contact)
-                                    } else {
-                                        spotlightIndexer.index(contact: contact)
-                                    }
-                                    // FIX 1: Explicit save
-                                    try? modelContext.save()
-                                }
-                                .tint(contact.isArchived ? .blue : .orange)
-                            }
+                            )
+                        Divider()
                     }
-                } header: {
-                    HStack(spacing: OrbitSpacing.sm) {
-                        Text(group.key)
-                            .font(OrbitTypography.captionMedium)
-                            .textCase(.uppercase)
-                            .tracking(1.5)
-                        Spacer()
-                        Text("\(group.contacts.count)")
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Color.clear
+                        .frame(height: 100)
                 }
             }
-
-            if groupedContacts.isEmpty && !allContacts.isEmpty {
-                Section {
-                    Text("No contacts match your current filters.")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                        .listRowBackground(Color.clear)
-                }
+            .scrollDisabled(isScrubbing)
+            .coordinateSpace(name: "TableSpace")
+            .onPreferenceChange(RowFramePreferenceKey.self) { frames in
+                self.rowFrames = frames
             }
-        }
-        .listStyle(.sidebar)
-    }
+            // Scrub Selection Gesture
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in
+                        // Only activate drag-to-select if the drag starts on the left 50 points (the checkbox column)
+                        guard value.startLocation.x < 50 else { return }
 
-    // MARK: - Attention Section
+                        // 3. ADD THIS: Tell the UI we are scrubbing so it freezes the ScrollView
+                        if !isScrubbing {
+                            isScrubbing = true
+                        }
 
-    private var attentionSection: some View {
-        Section {
-            ForEach(driftingContacts.prefix(5)) { contact in
-                HStack(spacing: OrbitSpacing.md) {
-                    Circle()
-                        .fill(contact.driftColor)
-                        .frame(width: 6, height: 6)
+                        if let row = rowFrames.first(where: { $0.frame.minY <= value.location.y && $0.frame.maxY >= value.location.y }) {
+                            if dragSelectionState == nil {
+                                dragSelectionState = !selectedContacts.contains(row.id)
+                            }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(contact.name)
-                            .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                        HStack(spacing: OrbitSpacing.sm) {
-                            Text(contact.orbitZoneName)
-                                .font(OrbitTypography.footnote)
-                                .foregroundStyle(.secondary)
-                            Text("·")
-                                .foregroundStyle(.tertiary)
-                            Text(contact.recencyDescription)
-                                .font(OrbitTypography.footnote)
-                                .foregroundStyle(contact.driftColor)
+                            if dragSelectionState == true {
+                                selectedContacts.insert(row.id)
+                            } else {
+                                selectedContacts.remove(row.id)
+                            }
                         }
                     }
-
-                    Spacer()
-
-                    Button {
-                        quickLog(contact: contact, impulse: "Check-in")
-                    } label: {
-                        Image(systemName: "plus.bubble")
-                            .font(.caption)
-                            .foregroundStyle(.blue)
+                    .onEnded { _ in
+                        isScrubbing = false
+                        dragSelectionState = nil
                     }
-                    .buttonStyle(.plain)
-                }
-                .tag(contact)
-            }
+            )
+        }
 
-            if driftingContacts.count > 5 {
-                Text("\(driftingContacts.count - 5) more need attention")
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(.tertiary)
+    #if os(macOS)
+    private var tableHeaderRow: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: 32)
+            columnHeader("Name", column: .name, minWidth: 140)
+            columnHeader("Orbit", column: .orbit, minWidth: 100)
+            columnHeader("Constellation", column: .constellation, minWidth: 120)
+            columnHeader("Last Contact", column: .lastContact, minWidth: 100)
+        }
+        .padding(.horizontal, OrbitSpacing.sm)
+        .padding(.vertical, OrbitSpacing.sm)
+        .background(Color.secondary.opacity(0.05))
+    }
+
+    private func columnHeader(_ title: String, column: SortColumn, minWidth: CGFloat) -> some View {
+        Button {
+            if sortColumn == column {
+                sortAscending.toggle()
+            } else {
+                sortColumn = column
+                sortAscending = true
             }
-        } header: {
-            HStack {
-                Label("Needs Attention", systemImage: "exclamationmark.circle")
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
                     .font(OrbitTypography.captionMedium)
-                    .foregroundStyle(.orange)
-                    .textCase(.uppercase)
-                    .tracking(1)
-                Spacer()
-            }
-        }
-    }
-
-    // MARK: - Upcoming Dates Section
-
-    private var upcomingSection: some View {
-        Section {
-            ForEach(upcomingDates.filter({ $0.daysUntil <= 7 })) { item in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.contact.name)
-                            .font(OrbitTypography.bodyMedium)
-                        Text(item.key.capitalized)
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(item.daysUntilText)
-                        .font(OrbitTypography.captionMedium)
-                        .foregroundStyle(item.urgencyColor)
+                    .foregroundStyle(.secondary)
+                if sortColumn == column {
+                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
                 }
             }
-        } header: {
-            Label("Coming Up", systemImage: "calendar")
-                .font(OrbitTypography.captionMedium)
-                .foregroundStyle(.cyan)
-                .textCase(.uppercase)
-                .tracking(1)
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: minWidth, alignment: .leading)
+    }
+    #endif
+
+    private func tableDataRow(contact: Contact) -> some View {
+        let isSelected = selectedContacts.contains(contact.id)
+        let tagDisplay = contact.aggregatedTags.prefix(3).map { "#\($0.name)" }.joined(separator: ", ")
+
+        #if os(iOS)
+        return HStack(alignment: .top, spacing: OrbitSpacing.md) {
+            // Checkbox Column
+            Button {
+                toggleSelection(for: contact.id)
+            } label: {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .padding(.vertical, OrbitSpacing.sm)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Contact Detail Column (Tapping this opens the profile)
+            VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+                HStack {
+                    Text(contact.name).font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                    Spacer()
+                    Text(contact.orbitZoneName).font(OrbitTypography.caption).foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Text("Last: \(contact.lastContactDate?.relativeDescription ?? "Never")")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let const = contact.constellations.first {
+                        Text("✦ \(const.name)")
+                            .font(OrbitTypography.caption)
+                            .foregroundStyle(.purple)
+                    }
+                }
+
+                if !tagDisplay.isEmpty {
+                    Text(tagDisplay)
+                        .font(OrbitTypography.footnote).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.vertical, OrbitSpacing.sm)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedContact = contact // Opens profile!
+            }
+        }
+        .padding(.horizontal, OrbitSpacing.sm)
+        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
+        
+        #else
+        return HStack(spacing: 0) {
+            Button {
+                toggleSelection(for: contact.id)
+            } label: {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 32)
+
+            Text(contact.name)
+                .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                .frame(minWidth: 140, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedContact = contact }
+
+            Text(contact.orbitZoneName)
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 100, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedContact = contact }
+            
+            Text(contact.constellations.first?.name ?? "--")
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 120, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedContact = contact }
+
+            Text(contact.lastContactDate?.relativeDescription ?? "Never")
+                .font(OrbitTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 100, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedContact = contact }
+        }
+        .padding(.horizontal, OrbitSpacing.sm)
+        .padding(.vertical, OrbitSpacing.xs)
+        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
+        #endif
+    }
+    
+    private func toggleSelection(for id: UUID) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if selectedContacts.contains(id) {
+                selectedContacts.remove(id)
+            } else {
+                selectedContacts.insert(id)
+            }
         }
     }
 
-    // MARK: - Empty State
+    // MARK: - Breathable Bottom Controls
+    
+    private var bottomControls: some View {
+            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+                // Search Bar Component
+                HStack(spacing: OrbitSpacing.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search table...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(OrbitSpacing.sm)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
 
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Contacts Yet", systemImage: "person.crop.circle.badge.plus")
-        } description: {
-            Text("Add your first contact to begin mapping your universe.")
-        } actions: {
-            Button("Open Command Palette") {
+            // Sort Section
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: OrbitSpacing.sm) {
+                    Text("SORT")
+                        .font(OrbitTypography.captionMedium)
+                        .tracking(1)
+                        .foregroundStyle(.tertiary)
+                    
+                    ForEach(SortColumn.allCases, id: \.self) { column in
+                        Button {
+                            if sortColumn == column {
+                                sortAscending.toggle()
+                            } else {
+                                sortColumn = column
+                                sortAscending = true
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(column.rawValue)
+                                if sortColumn == column {
+                                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 10, weight: .bold))
+                                }
+                            }
+                            .font(OrbitTypography.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(sortColumn == column ? .blue : .secondary)
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            // Filter Section
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: OrbitSpacing.sm) {
+                    Text("FILTER")
+                        .font(OrbitTypography.captionMedium)
+                        .tracking(1)
+                        .foregroundStyle(.tertiary)
+
+                    // Orbit Menu
+                    Menu {
+                        Button("Any Orbit") { filterOrbit = nil }
+                        Divider()
+                        ForEach(OrbitZone.allZones, id: \.id) { zone in
+                            Button(zone.name) { filterOrbit = zone.id }
+                        }
+                    } label: {
+                        Label(filterOrbit != nil ? OrbitZone.name(for: filterOrbit!) : "Orbit", systemImage: "circle.dotted")
+                            .font(OrbitTypography.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(filterOrbit != nil ? .blue : .secondary)
+                    .controlSize(.small)
+
+                    // Constellation Menu
+                    if !allConstellations.isEmpty {
+                        Menu {
+                            Button("Any Constellation") { filterConstellation = nil }
+                            Divider()
+                            ForEach(allConstellations) { c in
+                                Button("✦ \(c.name)") { filterConstellation = c }
+                            }
+                        } label: {
+                            Label(filterConstellation?.name ?? "Constellation", systemImage: "star")
+                                .font(OrbitTypography.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(filterConstellation != nil ? .blue : .secondary)
+                        .controlSize(.small)
+                    }
+
+                    // Tags Menu
+                    if !allTags.isEmpty {
+                        Menu {
+                            Button("Any Tag") { filterTag = nil }
+                            Divider()
+                            ForEach(allTags) { t in
+                                Button("#\(t.name)") { filterTag = t }
+                            }
+                        } label: {
+                            Label(filterTag != nil ? "#\(filterTag!.name)" : "Tags", systemImage: "tag")
+                                .font(OrbitTypography.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(filterTag != nil ? .blue : .secondary)
+                        .controlSize(.small)
+                    }
+
+                    // Interactions Menu
+                    Menu {
+                        ForEach(ActivityFilter.allCases, id: \.self) { f in
+                            Button(f.rawValue) { filterInteractions = f }
+                        }
+                    } label: {
+                        Label(filterInteractions.rawValue, systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                            .font(OrbitTypography.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(filterInteractions != .any ? .blue : .secondary)
+                    .controlSize(.small)
+
+                    // Artifacts Menu
+                    Menu {
+                        ForEach(ArtifactFilter.allCases, id: \.self) { f in
+                            Button(f.rawValue) { filterArtifacts = f }
+                        }
+                    } label: {
+                        Label(filterArtifacts.rawValue, systemImage: "tray")
+                            .font(OrbitTypography.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(filterArtifacts != .any ? .blue : .secondary)
+                    .controlSize(.small)
+
+                    // Archived Toggle
+                    Toggle("Archived", isOn: $showArchived)
+                        .toggleStyle(.button)
+                        .tint(showArchived ? .blue : .secondary)
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(OrbitSpacing.md)
+        .background(.regularMaterial)
+    }
+
+    // MARK: - Floating Toolbars
+    
+    private var floatingToolbarPill: some View {
+        HStack(spacing: 0) {
+            Button {
+                showAddContact = true
+            } label: {
+                Image(systemName: "person.badge.plus")
+                    .font(.title3.weight(.medium))
+                    .frame(width: 56, height: 56)
+            }
+            .help("Add Contact")
+            
+            Divider()
+                .frame(height: 24)
+                .background(Color.white.opacity(0.4))
+            
+            Button {
                 showCommandPalette = true
+            } label: {
+                Image(systemName: "command") // Swapped "plus" for "command" symbol
+                    .font(.title3.weight(.medium))
+                    .frame(width: 56, height: 56)
+            }
+            .help("Quick Log (⌘K)")
+        }
+        .background(Color.accentColor)
+        .foregroundStyle(.white)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+    }
+
+    private var floatingActionBar: some View {
+        HStack(spacing: OrbitSpacing.md) {
+            Text("\(selectedContacts.count) selected")
+                .font(OrbitTypography.captionMedium)
+                .foregroundStyle(.primary)
+            
+            Divider()
+                .frame(height: 16)
+            
+            Button("Select All") {
+                selectedContacts = Set(filteredAndSorted.map(\.id))
+            }
+            .font(OrbitTypography.caption)
+            .foregroundStyle(.blue)
+            
+            Spacer()
+            
+            Button {
+                selectedContacts.removeAll()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            
+            Button {
+                showBatchAction = true
+            } label: {
+                Label("Batch Actions", systemImage: "sparkles")
+                    .font(OrbitTypography.captionMedium)
             }
             .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .controlSize(.regular)
+        }
+        .padding(.horizontal, OrbitSpacing.lg)
+        .padding(.vertical, OrbitSpacing.sm)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+    }
+
+    // MARK: - Batch Actions Implementation
+
+    private func applyBatchAction(_ action: BatchAction) {
+        let descriptor = FetchDescriptor<Contact>()
+        guard let allFetched = try? modelContext.fetch(descriptor) else { return }
+
+        let targets = allFetched.filter { selectedContacts.contains($0.id) }
+
+        switch action {
+        case .setOrbit(let orbit):
+            for contact in targets {
+                contact.targetOrbit = orbit
+                contact.modifiedAt = Date()
+            }
+
+        case .archive:
+            for contact in targets {
+                contact.isArchived = true
+                contact.modifiedAt = Date()
+            }
+
+        case .restore:
+            for contact in targets {
+                contact.isArchived = false
+                contact.modifiedAt = Date()
+            }
+            
+        case .addToConstellation(let constellation):
+            for contact in targets {
+                if !contact.constellations.contains(where: { $0.id == constellation.id }) {
+                    contact.constellations.append(constellation)
+                    contact.modifiedAt = Date()
+                }
+            }
+            
+        case .removeFromConstellation(let constellation):
+            for contact in targets {
+                contact.constellations.removeAll(where: { $0.id == constellation.id })
+                contact.modifiedAt = Date()
+            }
+        }
+
+        try? modelContext.save()
+        withAnimation {
+            selectedContacts.removeAll()
         }
     }
+}
 
-    // MARK: - Actions
+// MARK: - Batch Action Types
+enum BatchAction {
+    case setOrbit(Int)
+    case archive
+    case restore
+    case addToConstellation(Constellation)
+    case removeFromConstellation(Constellation)
+}
 
-    private func quickLog(contact: Contact, impulse: String) {
-        let interaction = Interaction(impulse: impulse, date: Date())
-        interaction.contact = contact
-        modelContext.insert(interaction)
-        contact.refreshLastContactDate()
-        spotlightIndexer.index(contact: contact)
-        // FIX 1: Explicit save
-        try? modelContext.save()
-    }
+// MARK: - Batch Action Sheet
+struct BatchActionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    
+    @Query(sort: \Constellation.name) private var constellations: [Constellation]
 
-    // MARK: - Date Parsing
+    let selectedCount: Int
+    let onApply: (BatchAction) -> Void
 
-    private func findUpcomingDates(from contacts: [Contact]) -> [UpcomingDateItem] {
-        var items: [UpcomingDateItem] = []
-        let calendar = Calendar.current
-        let today = Date()
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Change Orbit Zone") {
+                    ForEach(OrbitZone.allZones, id: \.id) { zone in
+                        Button {
+                            onApply(.setOrbit(zone.id))
+                            dismiss()
+                        } label: {
+                            Label(zone.name, systemImage: "circle.dotted")
+                        }
+                    }
+                }
+                
+                if !constellations.isEmpty {
+                    Section("Constellations") {
+                        Menu {
+                            ForEach(constellations) { constellation in
+                                Button(constellation.name) {
+                                    onApply(.addToConstellation(constellation))
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            Label("Add to Constellation...", systemImage: "star.fill")
+                        }
+                        
+                        Menu {
+                            ForEach(constellations) { constellation in
+                                Button(constellation.name) {
+                                    onApply(.removeFromConstellation(constellation))
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            Label("Remove from Constellation...", systemImage: "star.slash")
+                        }
+                    }
+                }
 
-        for contact in contacts {
-            for artifact in contact.artifacts where artifact.isDateType {
-                if let nextDate = parseAndProjectDate(artifact.value, from: today) {
-                    let daysUntil = calendar.dateComponents([.day], from: today, to: nextDate).day ?? 999
-                    if daysUntil >= 0 && daysUntil <= 60 {
-                        items.append(UpcomingDateItem(
-                            contact: contact, key: artifact.key,
-                            date: nextDate, daysUntil: daysUntil
-                        ))
+                Section("Archive") {
+                    Button("Archive Selected") {
+                        onApply(.archive)
+                        dismiss()
+                    }
+                    .foregroundStyle(.orange)
+
+                    Button("Restore Selected") {
+                        onApply(.restore)
+                        dismiss()
                     }
                 }
             }
-        }
-        return items.sorted { $0.daysUntil < $1.daysUntil }
-    }
-
-    private func parseAndProjectDate(_ value: String, from reference: Date) -> Date? {
-        let slashParts = value.split(separator: "/")
-        if slashParts.count >= 2,
-           let month = Int(slashParts[0]), let day = Int(slashParts[1]),
-           (1...12).contains(month), (1...31).contains(day) {
-            return nextOccurrence(month: month, day: day, from: reference)
-        }
-        let dashParts = value.split(separator: "-")
-        if dashParts.count == 3, let month = Int(dashParts[1]), let day = Int(dashParts[2]) {
-            return nextOccurrence(month: month, day: day, from: reference)
-        }
-        let dateFormatter = DateFormatter()
-        for format in ["MMMM d", "MMM d", "MMMM dd", "MMM dd", "d MMMM", "d MMM"] {
-            dateFormatter.dateFormat = format
-            if let parsed = dateFormatter.date(from: value) {
-                let components = Calendar.current.dateComponents([.month, .day], from: parsed)
-                if let month = components.month, let day = components.day {
-                    return nextOccurrence(month: month, day: day, from: reference)
+            .navigationTitle("Batch Action (\(selectedCount) selected)")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                 }
             }
-        }
-        return nil
-    }
-
-    private func nextOccurrence(month: Int, day: Int, from reference: Date) -> Date? {
-        let calendar = Calendar.current
-        let year = calendar.component(.year, from: reference)
-        var components = DateComponents()
-        components.month = month
-        components.day = day
-        components.year = year
-        if let thisYear = calendar.date(from: components), thisYear >= reference {
-            return thisYear
-        }
-        components.year = year + 1
-        return calendar.date(from: components)
-    }
-}
-
-// MARK: - People Contact Row
-
-struct PeopleContactRow: View {
-    let contact: Contact
-
-    var body: some View {
-        HStack(spacing: OrbitSpacing.md) {
-            if contact.isDrifting {
-                Circle()
-                    .fill(contact.driftColor)
-                    .frame(width: 6, height: 6)
-            }
-
-            VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
-                Text(contact.name)
-                    .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
-
-                Text(contact.recencyDescription)
-                    .font(OrbitTypography.caption)
-                    .foregroundStyle(contact.isDrifting ? contact.driftColor : .secondary)
-            }
-
-            Spacer()
-
-            if !contact.aggregatedTags.isEmpty {
-                Text(contact.aggregatedTags.prefix(2).map { "#\($0.name)" }.joined(separator: " "))
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, OrbitSpacing.xs)
-    }
-}
-
-// MARK: - Supporting Types
-
-struct UpcomingDateItem: Identifiable {
-    let id = UUID()
-    let contact: Contact
-    let key: String
-    let date: Date
-    let daysUntil: Int
-
-    var daysUntilText: String {
-        switch daysUntil {
-        case 0: return "Today!"
-        case 1: return "Tomorrow"
-        case 2...7: return "In \(daysUntil) days"
-        default: return "In \(daysUntil / 7) weeks"
-        }
-    }
-
-    var urgencyColor: Color {
-        switch daysUntil {
-        case 0: return .red
-        case 1...3: return .orange
-        case 4...7: return .yellow
-        default: return .secondary
         }
     }
 }

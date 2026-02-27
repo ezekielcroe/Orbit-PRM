@@ -676,10 +676,23 @@ struct ImportPreviewSheet: View {
     let onImport: ([ImportableContact], Int) -> Void
 
     @State private var defaultOrbit: Int = 3 // Standard default
-    @State private var selectAll = true
+    @State private var searchText = ""
+
+    // 1. Filter the contacts based on the search bar
+    var filteredContacts: [ImportableContact] {
+        if searchText.isEmpty { return importableContacts }
+        let query = searchText.lowercased()
+        return importableContacts.filter { $0.name.lowercased().contains(query) }
+    }
 
     var selectedCount: Int {
         importableContacts.filter { $0.isSelected }.count
+    }
+    
+    // Helper to check if all *currently visible* contacts are selected
+    var allFilteredAreSelected: Bool {
+        guard !filteredContacts.isEmpty else { return false }
+        return filteredContacts.allSatisfy { $0.isSelected }
     }
 
     var body: some View {
@@ -687,21 +700,37 @@ struct ImportPreviewSheet: View {
             VStack(spacing: 0) {
                 List {
                     Section {
-                        Toggle("Select All", isOn: $selectAll)
-                            .onChange(of: selectAll) { _, newValue in
-                                for i in importableContacts.indices {
-                                    importableContacts[i].isSelected = newValue
+                        Button {
+                            let newState = !allFilteredAreSelected
+                            // Only toggle the ones currently shown in the search results
+                            for contact in filteredContacts {
+                                if let idx = importableContacts.firstIndex(where: { $0.id == contact.id }) {
+                                    importableContacts[idx].isSelected = newState
                                 }
                             }
+                        } label: {
+                            HStack {
+                                Image(systemName: allFilteredAreSelected ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(allFilteredAreSelected ? .blue : .secondary)
+                                    .font(.title3)
+                                
+                                Text(allFilteredAreSelected ? "Deselect All" : "Select All")
+                                    .foregroundStyle(.primary)
+                            }
+                        }
                     }
 
-                    Section(header: Text("Found \(importableContacts.count) New Contacts")) {
-                        ForEach($importableContacts) { $contact in
-                            ImportContactRow(contact: $contact)
+                    Section(header: Text(searchText.isEmpty ? "Found \(importableContacts.count) New Contacts" : "Found \(filteredContacts.count) Contacts")) {
+                        ForEach(filteredContacts) { contact in
+                            // Map the filtered contact back to the original array to safely update the Binding
+                            if let idx = importableContacts.firstIndex(where: { $0.id == contact.id }) {
+                                ImportContactRow(contact: $importableContacts[idx])
+                            }
                         }
                     }
                 }
                 .listStyle(.insetGrouped)
+                .searchable(text: $searchText, prompt: "Search contacts...") // 2. Add Search Bar
 
                 Divider()
                 importControls
@@ -752,17 +781,22 @@ struct ImportPreviewSheet: View {
     }
 }
 
+// MARK: - Updated Checkmark Row
 struct ImportContactRow: View {
     @Binding var contact: ImportableContact
 
     var body: some View {
-        HStack {
-            Toggle("", isOn: $contact.isSelected)
-                .labelsHidden()
+        HStack(spacing: OrbitSpacing.md) {
+            // 3. Replaced Toggle with Circular Checkmark
+            Image(systemName: contact.isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(contact.isSelected ? .blue : .secondary)
+                .font(.title3)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(contact.name)
                     .font(OrbitTypography.bodyMedium)
+                    .foregroundStyle(.primary)
+                
                 if !contact.details.isEmpty {
                     Text(contact.details)
                         .font(OrbitTypography.caption)
@@ -771,6 +805,7 @@ struct ImportContactRow: View {
                 }
             }
             Spacer()
+            
             if !contact.artifacts.isEmpty {
                 HStack(spacing: 2) {
                     Text("\(contact.artifacts.count)")
@@ -784,7 +819,9 @@ struct ImportContactRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            contact.isSelected.toggle()
+            withAnimation(.snappy(duration: 0.2)) {
+                contact.isSelected.toggle()
+            }
         }
     }
 }
