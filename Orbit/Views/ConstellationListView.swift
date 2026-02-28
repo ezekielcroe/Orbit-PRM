@@ -1,9 +1,7 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - ConstellationListView (Fix 4)
-// Enhanced from a settings sub-view to a first-class navigation destination.
-// Now shows aggregate stats: member count, drift count, shared tags, last activity.
+// MARK: - ConstellationListView
 
 struct ConstellationListView: View {
     @Environment(\.modelContext) private var modelContext
@@ -36,7 +34,7 @@ struct ConstellationListView: View {
                                 
                                 Button("Delete", role: .destructive) {
                                     modelContext.delete(constellation)
-                                    try? modelContext.save()
+                                    PersistenceHelper.saveWithLogging(modelContext, operation: "delete constellation")
                                 }
                                 .tint(.blue)
                             }
@@ -69,24 +67,48 @@ struct ConstellationListView: View {
     }
 }
 
+// MARK: - Cached Constellation Stats
+
+/// Pre-computed stats for a constellation row, avoiding repeated traversal.
+private struct ConstellationStats {
+    let memberCount: Int
+    let driftingCount: Int
+    let lastActivity: Date?
+    let topTags: [String]
+
+    init(constellation: Constellation) {
+        let members = (constellation.contacts ?? []).filter { !$0.isArchived }
+        self.memberCount = members.count
+        self.driftingCount = members.filter { $0.isDrifting }.count
+        self.lastActivity = members.compactMap { $0.lastContactDate }.max()
+
+        // Compute top tags using cached summaries instead of traversing interactions.
+        // Each contact's cachedTagSummary is a comma-separated string of top tags,
+        // already computed by refreshCachedFields(). We aggregate those.
+        var tagCounts: [String: Int] = [:]
+        for contact in members {
+            let tags = contact.cachedTagSummary.split(separator: ",")
+            for tag in tags {
+                let name = tag.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty {
+                    tagCounts[name, default: 0] += 1
+                }
+            }
+        }
+        self.topTags = tagCounts
+            .sorted { $0.value > $1.value }
+            .prefix(3)
+            .map(\.key)
+    }
+}
+
 // MARK: - Constellation Row
 
 struct ConstellationRowView: View {
     let constellation: Constellation
 
-    private var activeMembers: [Contact] {
-        (constellation.contacts ?? []).filter { !$0.isArchived }
-    }
-
-    private var driftingCount: Int {
-        activeMembers.filter { $0.isDrifting }.count
-    }
-
-    private var lastGroupActivity: Date? {
-        activeMembers
-            .compactMap { $0.lastContactDate }
-            .max()
-    }
+    // FIX P1-1.3: Cache stats on appear instead of recomputing per render
+    @State private var stats: ConstellationStats?
 
     var body: some View {
         VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
@@ -96,7 +118,7 @@ struct ConstellationRowView: View {
 
                 Spacer()
 
-                Text("\(activeMembers.count)")
+                Text("\(stats?.memberCount ?? 0)")
                     .font(OrbitTypography.captionMedium)
                     .foregroundStyle(.secondary)
                 Image(systemName: "person.2")
@@ -104,54 +126,46 @@ struct ConstellationRowView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: OrbitSpacing.md) {
-                if driftingCount > 0 {
-                    HStack(spacing: 2) {
-                        Circle()
-                            .fill(.orange)
-                            .frame(width: 5, height: 5)
-                        Text("\(driftingCount) drifting")
+            if let stats {
+                HStack(spacing: OrbitSpacing.md) {
+                    if stats.driftingCount > 0 {
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 5, height: 5)
+                            Text("\(stats.driftingCount) drifting")
+                                .font(OrbitTypography.footnote)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    if let lastDate = stats.lastActivity {
+                        Text("Last: \(lastDate.relativeDescription)")
                             .font(OrbitTypography.footnote)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    if !constellation.notes.isEmpty {
+                        Text(constellation.notes)
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
                 }
 
-                if let lastDate = lastGroupActivity {
-                    Text("Last: \(lastDate.relativeDescription)")
+                if !stats.topTags.isEmpty {
+                    Text(stats.topTags.map { "#\($0)" }.joined(separator: " "))
                         .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(OrbitColors.syntaxTag.opacity(0.7))
                 }
-
-                if !constellation.notes.isEmpty {
-                    Text(constellation.notes)
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            // FIX 4: Show shared interaction tags across the group
-            let sharedTags = topSharedTags(limit: 3)
-            if !sharedTags.isEmpty {
-                Text(sharedTags.map { "#\($0)" }.joined(separator: " "))
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(OrbitColors.syntaxTag.opacity(0.7))
             }
         }
         .padding(.vertical, OrbitSpacing.xs)
-    }
-
-    /// Find the most common tags across all members' interactions
-    private func topSharedTags(limit: Int) -> [String] {
-        var tagCounts: [String: Int] = [:]
-        for contact in activeMembers {
-            for tag in contact.aggregatedTags {
-                tagCounts[tag.name, default: 0] += tag.count
-            }
+        .onAppear {
+            stats = ConstellationStats(constellation: constellation)
         }
-        return tagCounts
-            .sorted { $0.value > $1.value }
-            .prefix(limit)
-            .map(\.key)
+        .onChange(of: constellation.contacts?.count) { _, _ in
+            stats = ConstellationStats(constellation: constellation)
+        }
     }
 }

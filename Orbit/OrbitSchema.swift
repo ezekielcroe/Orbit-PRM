@@ -35,6 +35,18 @@ final class Contact {
     var cachedCadenceDays: Double = 0.0
     var lastContactDate: Date?
 
+    /// Number of non-deleted interactions. Used by PeopleView filters
+    /// ("Has Logs" / "No Logs") without faulting the relationship.
+    var cachedInteractionCount: Int = 0
+
+    /// Comma-separated top tag names (max 5) for display in list rows
+    /// and for filter matching. Updated by refreshCachedFields().
+    var cachedTagSummary: String = ""
+
+    /// Whether this contact has any artifacts. Used by PeopleView
+    /// "Has Artifacts" filter without faulting the relationship.
+    var cachedHasArtifacts: Bool = false
+
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \Interaction.contact)
     var interactions: [Interaction]?
@@ -60,6 +72,9 @@ final class Contact {
         self.gravityScore = 5.0
         self.cachedMomentum = 0.0
         self.cachedCadenceDays = 0.0
+        self.cachedInteractionCount = 0
+        self.cachedTagSummary = ""
+        self.cachedHasArtifacts = false
     }
 
     var orbitZoneName: String {
@@ -82,19 +97,73 @@ final class Contact {
         searchableName = name.lowercased()
     }
 
-    func refreshLastContactDate() {
-        lastContactDate = interactions?
-            .filter { !$0.isDeleted }
-            .map(\.date)
-            .max()
+    // ┌─────────────────────────────────────────────────────────────┐
+    // │ FIX P0-1.1: refreshCachedFields() replaces the old         │
+    // │ refreshLastContactDate(). Updates ALL cached fields in one  │
+    // │ pass through the interaction graph.                          │
+    // │                                                             │
+    // │ Call this whenever interactions change:                      │
+    // │   - After logging an interaction                             │
+    // │   - After deleting/undeleting an interaction                 │
+    // │   - After editing interaction tags                           │
+    // │   - During data integrity checks                             │
+    // └─────────────────────────────────────────────────────────────┘
+
+    func refreshCachedFields() {
+        let active = (interactions ?? []).filter { !$0.isDeleted }
+
+        // 1. Last contact date
+        lastContactDate = active.map(\.date).max()
+
+        // 2. Active interaction count (for "Has Logs" / "No Logs" filters)
+        cachedInteractionCount = active.count
+
+        // 3. Tag summary (for list display and tag filter matching)
+        //    Compute aggregated tags in a single pass
+        var tagCounts: [String: Int] = [:]
+        for interaction in active {
+            for tag in interaction.tagList {
+                let key = tag.lowercased()
+                tagCounts[key, default: 0] += 1
+            }
+        }
+        let topTags = tagCounts
+            .sorted { $0.value > $1.value }
+            .prefix(5)
+            .map(\.key)
+        cachedTagSummary = topTags.joined(separator: ",")
+
+        // 4. Artifact presence
+        cachedHasArtifacts = !(artifacts ?? []).isEmpty
+
+        // 5. Timestamp
         modifiedAt = Date()
+    }
+
+    /// Convenience: refresh just the artifact cache flag.
+    /// Call after adding/removing artifacts without touching interactions.
+    func refreshArtifactCache() {
+        cachedHasArtifacts = !(artifacts ?? []).isEmpty
+        modifiedAt = Date()
+    }
+
+    // MARK: - Backward Compatibility
+    // These keep existing call sites working during the transition.
+    // TODO: Remove once all callers migrate to refreshCachedFields().
+
+    func refreshLastContactDate() {
+        refreshCachedFields()
     }
 
     // MARK: - Aggregated Interaction Tags
     // Tags live on interactions, not contacts. These computed properties
     // aggregate tag usage across all active interactions for display and filtering.
+    //
+    // ⚠️ PERFORMANCE NOTE: These traverse all interactions. Use them in detail views,
+    //    NOT in list rows. For list rows, use cachedTagSummary instead.
 
-    /// All tags from this contact's interactions, counted and sorted by frequency
+    /// All tags from this contact's interactions, counted and sorted by frequency.
+    /// Expensive — traverses all active interactions. Use in detail views only.
     var aggregatedTags: [AggregatedTag] {
         let allTagNames = activeInteractions.flatMap { $0.tagList }
         guard !allTagNames.isEmpty else { return [] }
@@ -115,10 +184,18 @@ final class Contact {
         aggregatedTags.map(\.name)
     }
 
-    /// Check if this contact has any interaction with the given tag
+    /// Check if this contact has any interaction with the given tag.
+    /// For list-level filtering, prefer checking cachedTagSummary.contains() instead.
     func hasInteractionTag(_ tagName: String) -> Bool {
         let search = tagName.lowercased()
         return aggregatedTags.contains { $0.name == search }
+    }
+
+    /// Fast tag check using the cached summary. O(1) string search
+    /// instead of O(n) interaction traversal.
+    func hasCachedTag(_ tagName: String) -> Bool {
+        let search = tagName.lowercased()
+        return cachedTagSummary.lowercased().split(separator: ",").contains { $0 == Substring(search) }
     }
 
     // MARK: - Drift Detection (single source of truth)
@@ -168,7 +245,9 @@ final class Contact {
         return .secondary
     }
 
-    /// Active (non-deleted) interactions, sorted most recent first
+    /// Active (non-deleted) interactions, sorted most recent first.
+    /// ⚠️ PERFORMANCE: Filters and sorts on every access. Cache the result
+    ///    in a local variable if you need to access it multiple times in one scope.
     var activeInteractions: [Interaction] {
             (interactions ?? [])
                 .filter { !$0.isDeleted }
@@ -239,6 +318,8 @@ final class Artifact {
         self.modifiedAt = Date()
     }
 
+    /// Decode array values. Caches would be nice here, but SwiftData models
+    /// can't hold non-persistent stored properties easily. Keep call sites aware.
     var listValues: [String] {
         guard isArray else { return [value] }
         return (try? JSONDecoder().decode([String].self, from: Data(value.utf8))) ?? [value]
@@ -324,6 +405,18 @@ final class Constellation {
     }
 }
 
+
+// ┌─────────────────────────────────────────────────────────────────┐
+// │ FIX P0-2.5: Versioned Schema & Migration Plan                   │
+// │                                                                  │
+// │ V1 is the original schema (pre-release). Since the app has not  │
+// │ shipped yet (v1.0 in About), we add cached fields directly to   │
+// │ V1. Once V1 ships, it must be LOCKED — never modified again.    │
+// │                                                                  │
+// │ Future changes go in V2 with a lightweight migration stage.     │
+// │ The template below shows exactly how to do this.                │
+// └─────────────────────────────────────────────────────────────────┘
+
 // MARK: - Versioned Schema
 
 enum OrbitSchemaV1: VersionedSchema {
@@ -335,12 +428,52 @@ enum OrbitSchemaV1: VersionedSchema {
 }
 
 // MARK: - Migration Plan
+
 enum OrbitMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
         [OrbitSchemaV1.self]
+        // When V2 ships, add it here:
+        // [OrbitSchemaV1.self, OrbitSchemaV2.self]
     }
 
     static var stages: [MigrationStage] {
+        // When V2 ships, add migration here:
+        // [migrateV1toV2]
         []
     }
+
+    // ┌─────────────────────────────────────────────────────────────┐
+    // │ TEMPLATE: How to add a migration when V2 is needed          │
+    // │                                                              │
+    // │ 1. Create OrbitSchemaV2 with the new models                  │
+    // │ 2. Add it to the schemas array above                        │
+    // │ 3. Uncomment and implement the migration stage below         │
+    // │ 4. NEVER modify OrbitSchemaV1 after it ships                │
+    // └─────────────────────────────────────────────────────────────┘
+    //
+    // static let migrateV1toV2 = MigrationStage.lightweight(
+    //     fromVersion: OrbitSchemaV1.self,
+    //     toVersion: OrbitSchemaV2.self
+    // )
+    //
+    // For complex migrations that need data transformation:
+    //
+    // static let migrateV1toV2 = MigrationStage.custom(
+    //     fromVersion: OrbitSchemaV1.self,
+    //     toVersion: OrbitSchemaV2.self,
+    //     willMigrate: { context in
+    //         // Pre-migration: transform data in V1 format
+    //     },
+    //     didMigrate: { context in
+    //         // Post-migration: populate new V2 fields
+    //         // e.g., backfill cachedInteractionCount for all contacts
+    //         let descriptor = FetchDescriptor<Contact>()
+    //         if let contacts = try? context.fetch(descriptor) {
+    //             for contact in contacts {
+    //                 contact.refreshCachedFields()
+    //             }
+    //             try? context.save()
+    //         }
+    //     }
+    // )
 }

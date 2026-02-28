@@ -6,8 +6,6 @@ import SwiftData
 // This is the bridge between the text parser and the data layer.
 // It returns a CommandResult so the UI can show confirmation or errors.
 //
-// FIX 1: Every mutation now ends with an explicit `try? context.save()`
-// to prevent data loss from non-deterministic SwiftData autosave.
 
 struct CommandResult {
     let success: Bool
@@ -22,6 +20,9 @@ final class CommandExecutor {
     // Tracks the most recent interaction for undo support
     private(set) var lastCreatedInteraction: Interaction?
     private(set) var lastResult: CommandResult?
+
+    /// The last save error, if any. UI can observe this.
+    private(set) var lastSaveError: String?
 
     // MARK: - Execute
 
@@ -84,9 +85,15 @@ final class CommandExecutor {
             result = CommandResult(success: false, message: reason, affectedContact: nil)
         }
 
-        // FIX 1: Explicit save after every mutation to prevent data loss
+        // FIX P1-2.1: Single save point with error capture.
+        // All mutating methods above modify objects without saving.
+        // We save once here, and capture any errors.
         if result.success {
-            try? context.save()
+            if !PersistenceHelper.saveWithLogging(context, operation: "execute command") {
+                lastSaveError = "Changes may not have been saved."
+            } else {
+                lastSaveError = nil
+            }
         }
 
         lastResult = result
@@ -122,13 +129,12 @@ final class CommandExecutor {
         interaction.contact = contact
 
         context.insert(interaction)
-        contact.refreshLastContactDate()
 
-        // Ensure tag names exist in the tag registry (for autocomplete).
-        // Tags are NOT linked to contacts — they live on interactions only.
-        for tagName in tags {
-            ensureTagExists(named: tagName, in: context)
-        }
+        // FIX P0-1.1: Use refreshCachedFields() to update all caches in one pass
+        contact.refreshCachedFields()
+
+        // FIX P2-3.5: Use consolidated TagRegistry
+        TagRegistry.ensureTagsExist(named: tags, in: context)
 
         lastCreatedInteraction = interaction
 
@@ -164,7 +170,7 @@ final class CommandExecutor {
             context.insert(artifact)
         }
 
-        contact.modifiedAt = Date()
+        contact.refreshArtifactCache()
 
         return CommandResult(
             success: true,
@@ -200,7 +206,7 @@ final class CommandExecutor {
             artifact.appendValue(value)
         }
 
-        contact.modifiedAt = Date()
+        contact.refreshArtifactCache()
         return CommandResult(success: true, message: "Added \(value) to \(contact.name)'s \(parsedKey)", affectedContact: contact)
     }
 
@@ -241,6 +247,7 @@ final class CommandExecutor {
         }
 
         context.delete(existing)
+        contact.refreshArtifactCache()
 
         return CommandResult(
             success: true,
@@ -314,13 +321,12 @@ final class CommandExecutor {
             interaction.tagNames = tags.joined(separator: ", ")
             interaction.contact = contact
             context.insert(interaction)
-            contact.refreshLastContactDate()
+            // FIX P0-1.1: Update all caches
+            contact.refreshCachedFields()
         }
 
-        // Ensure tag names exist in registry
-        for tagName in tags {
-            ensureTagExists(named: tagName, in: context)
-        }
+        // FIX P2-3.5: Use consolidated TagRegistry with batch insert
+        TagRegistry.ensureTagsExist(named: tags, in: context)
 
         let dateStr = timeModifier != nil ? " on \(date.formatted(date: .abbreviated, time: .omitted))" : ""
         return CommandResult(
@@ -386,7 +392,7 @@ final class CommandExecutor {
 
         return CommandResult(
             success: true,
-            message: "Removed \(contact.name) from ✦ \(String(describing: name))",
+            message: "Removed \(contact.name) from ✦ \(name)",
             affectedContact: contact
         )
     }
@@ -416,7 +422,8 @@ final class CommandExecutor {
 
         // Soft delete — preserves the record but hides it
         interaction.isDeleted = true
-        interaction.contact?.refreshLastContactDate()
+        // FIX P0-1.1: Update caches after undo
+        interaction.contact?.refreshCachedFields()
         lastCreatedInteraction = nil
 
         return CommandResult(
@@ -425,7 +432,7 @@ final class CommandExecutor {
             affectedContact: interaction.contact
         )
     }
-    
+
     // MARK: Artifact Category
     private func parseCategoryAndKey(from rawKey: String) -> (category: String?, key: String) {
         let components = rawKey.split(separator: "/", maxSplits: 1)
@@ -438,7 +445,7 @@ final class CommandExecutor {
 
     // MARK: - Helpers
 
-    /// Find a contact by name (case-insensitive fuzzy match).
+    /// Find a contact by name (case-insensitive exact match, then prefix fallback).
     /// Returns the best match or nil.
     func findContact(named name: String, in context: ModelContext, includeArchived: Bool = false) -> Contact? {
         let searchName = name.lowercased()
@@ -480,21 +487,5 @@ final class CommandExecutor {
         var descriptor = FetchDescriptor<Contact>(predicate: predicate)
         descriptor.fetchLimit = limit
         return (try? context.fetch(descriptor)) ?? []
-    }
-
-    /// Ensure a tag name exists in the tag registry (for autocomplete).
-    /// Does NOT link the tag to any contact — tags are interaction-level data.
-    private func ensureTagExists(named name: String, in context: ModelContext) {
-        let searchName = name.lowercased()
-        let predicate = #Predicate<Tag> { tag in
-            tag.searchableName == searchName
-        }
-        var descriptor = FetchDescriptor<Tag>(predicate: predicate)
-        descriptor.fetchLimit = 1
-
-        if (try? context.fetch(descriptor).first) == nil {
-            let tag = Tag(name: name)
-            context.insert(tag)
-        }
     }
 }

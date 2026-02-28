@@ -5,12 +5,6 @@ import SwiftData
 // MARK: - SpotlightIndexer
 // Indexes Orbit contacts into CoreSpotlight so they appear in
 // system-wide search (Spotlight on iOS/macOS).
-//
-// Design decisions:
-// - Index contact name, orbit zone, tags, and key artifact values
-// - Re-index on contact save/modify, de-index on archive/delete
-// - Use contact UUID as the unique Spotlight identifier
-// - Batch operations for initial indexing after import
 
 @Observable
 final class SpotlightIndexer {
@@ -117,8 +111,6 @@ final class SpotlightIndexer {
     }
 
     // MARK: - Handle Spotlight Tap
-    // When a user taps a Spotlight result, the app receives the contact's UUID.
-    // The app delegate or scene delegate should call this to resolve the contact.
 
     static func contactID(from userActivity: NSUserActivity) -> UUID? {
         guard userActivity.activityType == CSSearchableItemActionType,
@@ -145,10 +137,10 @@ final class SpotlightIndexer {
             parts.append(tagDisplay)
         }
 
-        // Constellations
-        let constellationDisplay = contact.constellations?.prefix(2).map(\.name).joined(separator: ", ")
-        if ((constellationDisplay?.isEmpty) == nil) {
-            parts.append("★ \(String(describing: constellationDisplay))")
+        if let constellationNames = contact.constellations?.prefix(2).map(\.name),
+           !constellationNames.isEmpty {
+            let display = constellationNames.joined(separator: ", ")
+            parts.append("★ \(display)")
         }
 
         // Add key artifacts for context
@@ -164,7 +156,7 @@ final class SpotlightIndexer {
 
         return parts.joined(separator: " · ")
     }
-    
+
     func deleteAll() {
         CSSearchableIndex.default().deleteAllSearchableItems { error in
             if let error = error {
@@ -173,4 +165,3 @@ final class SpotlightIndexer {
         }
     }
 }
-
