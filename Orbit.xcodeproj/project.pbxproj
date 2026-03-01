@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		FE24F57A2F51B8EA00EE5404 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */; };
 		FE4FCFED2F469807006AF61B /* CoreSpotlight.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FE4FCFEC2F469807006AF61B /* CoreSpotlight.framework */; };
+		FE7089252F53F6F400274913 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		FE4FCF7F2F4695DF006AF61B /* Orbit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Orbit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE4FCFEC2F469807006AF61B /* CoreSpotlight.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreSpotlight.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.2.sdk/System/Library/Frameworks/CoreSpotlight.framework; sourceTree = DEVELOPER_DIR; };
+		FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -53,6 +55,7 @@
 		FE4FCF762F4695DF006AF61B = {
 			isa = PBXGroup;
 			children = (
+				FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */,
 				FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */,
 				FE4FCF812F4695DF006AF61B /* Orbit */,
 				FE4FCFEB2F469807006AF61B /* Frameworks */,
@@ -140,6 +143,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FE7089252F53F6F400274913 /* PrivacyInfo.xcprivacy in Resources */,
 				FE24F57A2F51B8EA00EE5404 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -303,7 +307,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Orbit/Info.plist;
-				INFOPLIST_KEY_NSContactsUsageDescription = "Orbit can import names from your Contacts to seed your relationship map.";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Orbit needs access to your contacts to let you quickly import names and basic info. This data never leaves your device.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -363,7 +368,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Orbit/Info.plist;
-				INFOPLIST_KEY_NSContactsUsageDescription = "Orbit can import names from your Contacts to seed your relationship map.";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Orbit needs access to your contacts to let you quickly import names and basic info. This data never leaves your device.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
