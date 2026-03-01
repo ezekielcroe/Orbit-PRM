@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		FE24F57A2F51B8EA00EE5404 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */; };
+		FE24F57A2F51B8EA00EE5404 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */; platformFilter = ios; };
 		FE4FCFED2F469807006AF61B /* CoreSpotlight.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FE4FCFEC2F469807006AF61B /* CoreSpotlight.framework */; };
 		FE7089252F53F6F400274913 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */

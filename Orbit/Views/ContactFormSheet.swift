@@ -51,6 +51,7 @@ struct ContactFormSheet: View {
                     validationSection
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle(isEditing ? "Edit Contact" : "New Contact")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -68,6 +69,9 @@ struct ContactFormSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(width: 450, height: 550)
+        #endif
     }
 
     private var nameSection: some View {
@@ -197,7 +201,6 @@ struct ContactFormSheet: View {
             onSave?(contact)
         }
 
-        // FIX 1: Explicit save
         try? modelContext.save()
     }
 }

@@ -108,6 +108,7 @@ struct InteractionEditSheet: View {
                     }
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle("Edit Interaction")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -134,6 +135,9 @@ struct InteractionEditSheet: View {
                 Text("This will permanently remove this interaction. This action cannot be undone.")
             }
         }
+        #if os(macOS)
+        .frame(width: 450, height: 550)
+        #endif
     }
 
     // MARK: - Tag Helpers

@@ -147,7 +147,9 @@ struct ConstellationDetailView: View {
         )
         .background(OrbitColors.commandBackground.ignoresSafeArea())
         .navigationTitle(constellation.name)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .overlay(alignment: .bottom) {
             if !selectedMembers.isEmpty {
                 floatingActionBar

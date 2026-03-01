@@ -59,6 +59,10 @@ final class Contact {
 
     @Relationship(inverse: \Constellation.contacts)
     var constellations: [Constellation]?
+    
+    @Transient var sortableLastContactDate: Date {
+        return lastContactDate ?? .distantPast
+    }
 
     init(name: String, notes: String = "", targetOrbit: Int = 2) {
         self.id = UUID()
@@ -399,17 +403,18 @@ final class Constellation {
     }
 }
 
-
-// ┌─────────────────────────────────────────────────────────────────┐
-// │ FIX P0-2.5: Versioned Schema & Migration Plan                   │
-// │                                                                  │
-// │ V1 is the original schema (pre-release). Since the app has not  │
-// │ shipped yet (v1.0 in About), we add cached fields directly to   │
-// │ V1. Once V1 ships, it must be LOCKED — never modified again.    │
-// │                                                                  │
-// │ Future changes go in V2 with a lightweight migration stage.     │
-// │ The template below shows exactly how to do this.                │
-// └─────────────────────────────────────────────────────────────────┘
+extension Contact {
+    // Returns the first constellation name, or "zzzz" so contacts without
+    // constellations naturally sink to the bottom when sorted A-Z.
+    @Transient var sortableConstellationName: String {
+        return constellations?.first?.name ?? "zzzz"
+    }
+    
+    // Returns the raw tag summary string (or an empty string if nil)
+    @Transient var sortableTags: String {
+        return cachedTagSummary // Assuming this is already a non-optional String
+    }
+}
 
 // MARK: - Versioned Schema
 
@@ -435,7 +440,7 @@ enum OrbitMigrationPlan: SchemaMigrationPlan {
         // [migrateV1toV2]
         []
     }
-
+    
     // ┌─────────────────────────────────────────────────────────────┐
     // │ TEMPLATE: How to add a migration when V2 is needed          │
     // │                                                              │

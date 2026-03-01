@@ -56,7 +56,9 @@ struct ContactDetailView: View {
         }
         .background(OrbitColors.commandBackground.ignoresSafeArea())
         .navigationTitle(contact.name)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar { toolbarContent }
         // Sheets
         .sheet(isPresented: $showEditForm) { ContactFormSheet(mode: .edit(contact)) }

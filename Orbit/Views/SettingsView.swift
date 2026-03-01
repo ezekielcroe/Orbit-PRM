@@ -80,9 +80,13 @@ struct SettingsView: View {
                 maintenanceSection
                 aboutSection
             }
+            .formStyle(.grouped)
             .navigationTitle("Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
+            #if os(macOS)
+            .frame(maxWidth: 700)
             #endif
         }
         .onAppear {
@@ -760,7 +764,9 @@ struct ImportPreviewSheet: View {
                         }
                     }
                 }
+                #if os(iOS)
                 .listStyle(.insetGrouped)
+                #endif
                 .searchable(text: $searchText, prompt: "Search contacts...") // 2. Add Search Bar
 
                 Divider()

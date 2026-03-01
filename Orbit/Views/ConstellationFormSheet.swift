@@ -80,6 +80,7 @@ struct ConstellationFormSheet: View {
                     }
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle(editingConstellation == nil ? "New Constellation" : "Edit Constellation")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -96,6 +97,9 @@ struct ConstellationFormSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(width: 450, height: 550)
+        #endif
     }
     
     private func save() {

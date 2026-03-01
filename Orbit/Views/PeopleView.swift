@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Row Geometry Tracking for Drag-to-Select
+// MARK: - Row Geometry Tracking for Drag-to-Select (iOS Only)
 struct RowFrameData: Equatable {
     let id: UUID
     let frame: CGRect
@@ -41,6 +41,11 @@ struct PeopleView: View {
     @State private var showBatchAction = false
     @State private var showAddContact = false
     
+    #if os(macOS)
+    // FIX: Native macOS table sort state
+    @State private var sortOrder = [KeyPathComparator(\Contact.name)]
+    #endif
+    
     // Filter State
     @State private var filterOrbit: Int?
     @State private var filterConstellation: Constellation?
@@ -49,7 +54,7 @@ struct PeopleView: View {
     @State private var filterArtifacts: ArtifactFilter = .any
     @State private var showArchived = false
 
-    // Drag-to-select State
+    // Drag-to-select State (iOS Only)
     @State private var rowFrames: [RowFrameData] = []
     @State private var dragSelectionState: Bool? = nil
     @State private var isScrubbing = false
@@ -73,11 +78,6 @@ struct PeopleView: View {
         case noArtifacts = "No Artifacts"
     }
 
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │ FIX P0-1.2: Filters now use cached fields                   │
-    // │                                                              │
-    // │ Changed lines marked with // FIX: was ...                   │
-    // └─────────────────────────────────────────────────────────────┘
     private var filteredAndSorted: [Contact] {
         var result = allContacts
 
@@ -93,19 +93,16 @@ struct PeopleView: View {
             result = result.filter { ($0.constellations ?? []).contains(where: { $0.id == const.id }) }
         }
         
-        // FIX: was `$0.hasInteractionTag(tag.searchableName)` — traversed all interactions
         if let tag = filterTag {
             result = result.filter { $0.hasCachedTag(tag.searchableName) }
         }
         
-        // FIX: was `!$0.activeInteractions.isEmpty` — filtered+sorted ALL interactions
         if filterInteractions == .hasLogs {
             result = result.filter { $0.cachedInteractionCount > 0 }
         } else if filterInteractions == .noLogs {
             result = result.filter { $0.cachedInteractionCount == 0 }
         }
         
-        // FIX: was `!($0.artifacts ?? []).isEmpty` — faulted the relationship
         if filterArtifacts == .hasArtifacts {
             result = result.filter { $0.cachedHasArtifacts }
         } else if filterArtifacts == .noArtifacts {
@@ -117,6 +114,11 @@ struct PeopleView: View {
             result = result.filter { $0.searchableName.contains(query) }
         }
 
+        #if os(macOS)
+        // FIX: Use native KeyPath comparators for macOS
+        result.sort(using: sortOrder)
+        #else
+        // iOS manual sorting
         result.sort { a, b in
             let comparison: Bool
             switch sortColumn {
@@ -133,6 +135,7 @@ struct PeopleView: View {
             }
             return sortAscending ? comparison : !comparison
         }
+        #endif
 
         return result
     }
@@ -147,7 +150,11 @@ struct PeopleView: View {
                     )
                     .frame(maxHeight: .infinity)
                 } else {
-                    tableContent
+                    #if os(macOS)
+                    macOSTable
+                    #else
+                    iosCustomTable
+                    #endif
                 }
             }
             .navigationTitle("People")
@@ -186,16 +193,71 @@ struct PeopleView: View {
         }
     }
 
-    // MARK: - Table Content
+    // MARK: - macOS Native Table
 
-    private var tableContent: some View {
+    #if os(macOS)
+    private var macOSTable: some View {
+            Table(filteredAndSorted, selection: $selectedContacts, sortOrder: $sortOrder) {
+                TableColumn("Name", value: \.name) { contact in
+                    Text(contact.name)
+                        .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                }
+                .width(min: 140, ideal: 200)
+                
+                TableColumn("Orbit", value: \.targetOrbit) { contact in
+                    Text(contact.orbitZoneName)
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .width(ideal: 100)
+                
+                TableColumn("Constellation", value: \.sortableConstellationName) { contact in
+                    Text(contact.constellations?.first?.name ?? "--")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .width(ideal: 120)
+                
+                TableColumn("Tags", value: \.sortableTags) { contact in
+                    let tagDisplay = contact.cachedTagSummary.split(separator: ",").prefix(3).map { "#\($0)" }.joined(separator: ", ")
+                    Text(tagDisplay.isEmpty ? "--" : tagDisplay)
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .width(ideal: 150)
+                
+                TableColumn("Last Contact", value: \.sortableLastContactDate) { contact in
+                    Text(contact.lastContactDate?.relativeDescription ?? "Never")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .width(ideal: 100)
+            }
+            .onChange(of: selectedContacts) { _, newSelection in
+                // Sync selection with detail pane
+                if let firstID = newSelection.first, let contact = allContacts.first(where: { $0.id == firstID }) {
+                    selectedContact = contact
+                } else if newSelection.isEmpty {
+                    selectedContact = nil
+                }
+            }
+            .contextMenu(forSelectionType: Contact.ID.self) { items in
+                if !items.isEmpty {
+                    Button("Edit \(items.count) Selected...") {
+                        selectedContacts = items
+                        showBatchAction = true
+                    }
+                }
+            }
+        }
+    #endif
+
+    // MARK: - iOS Custom Table
+
+    #if os(iOS)
+    private var iosCustomTable: some View {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    #if os(macOS)
-                    tableHeaderRow
-                    Divider()
-                    #endif
-                    
                     ForEach(filteredAndSorted) { contact in
                         tableDataRow(contact: contact)
                             .background(
@@ -208,8 +270,7 @@ struct PeopleView: View {
                             )
                         Divider()
                     }
-                    Color.clear
-                        .frame(height: 100)
+                    Color.clear.frame(height: 100)
                 }
             }
             .scrollDisabled(isScrubbing)
@@ -245,54 +306,11 @@ struct PeopleView: View {
             )
         }
 
-    #if os(macOS)
-    private var tableHeaderRow: some View {
-        HStack(spacing: 0) {
-            Color.clear.frame(width: 32)
-            columnHeader("Name", column: .name, minWidth: 140)
-            columnHeader("Orbit", column: .orbit, minWidth: 100)
-            columnHeader("Constellation", column: .constellation, minWidth: 120)
-            columnHeader("Last Contact", column: .lastContact, minWidth: 100)
-        }
-        .padding(.horizontal, OrbitSpacing.sm)
-        .padding(.vertical, OrbitSpacing.sm)
-        .background(Color.secondary.opacity(0.05))
-    }
-
-    private func columnHeader(_ title: String, column: SortColumn, minWidth: CGFloat) -> some View {
-        Button {
-            if sortColumn == column {
-                sortAscending.toggle()
-            } else {
-                sortColumn = column
-                sortAscending = true
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(OrbitTypography.captionMedium)
-                    .foregroundStyle(.secondary)
-                if sortColumn == column {
-                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .frame(minWidth: minWidth, alignment: .leading)
-    }
-    #endif
-
     private func tableDataRow(contact: Contact) -> some View {
         let isSelected = selectedContacts.contains(contact.id)
-        // FIX P0-1.1: Use cachedTagSummary instead of aggregatedTags.
-        // Before: contact.aggregatedTags.prefix(3).map { "#\($0.name)" }.joined(separator: ", ")
-        // That traversed all interactions → flatMapped tags → built dictionary → sorted → sliced.
         let tagDisplay = contact.cachedTagSummary.isEmpty ? "" :
             contact.cachedTagSummary.split(separator: ",").prefix(3).map { "#\($0)" }.joined(separator: ", ")
 
-        #if os(iOS)
         return HStack(alignment: .top, spacing: OrbitSpacing.md) {
             // Checkbox Column
             Button {
@@ -339,50 +357,8 @@ struct PeopleView: View {
         }
         .padding(.horizontal, OrbitSpacing.sm)
         .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
-        
-        #else
-        return HStack(spacing: 0) {
-            Button {
-                toggleSelection(for: contact.id)
-            } label: {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(isSelected ? .blue : .secondary)
-            }
-            .buttonStyle(.plain)
-            .frame(width: 32)
-
-            Text(contact.name)
-                .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                .frame(minWidth: 140, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { selectedContact = contact }
-
-            Text(contact.orbitZoneName)
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 100, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { selectedContact = contact }
-            
-            Text(contact.constellations?.first?.name ?? "--")
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 120, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { selectedContact = contact }
-
-            Text(contact.lastContactDate?.relativeDescription ?? "Never")
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 100, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { selectedContact = contact }
-        }
-        .padding(.horizontal, OrbitSpacing.sm)
-        .padding(.vertical, OrbitSpacing.xs)
-        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
-        #endif
     }
+    #endif
     
     private func toggleSelection(for id: UUID) {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -416,6 +392,8 @@ struct PeopleView: View {
                 .padding(OrbitSpacing.sm)
                 .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
 
+            // FIX: Hide manual sort buttons on macOS since column headers handle it natively
+            #if os(iOS)
             // Sort Section
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: OrbitSpacing.sm) {
@@ -448,6 +426,7 @@ struct PeopleView: View {
                     }
                 }
             }
+            #endif
 
             // Filter Section
             ScrollView(.horizontal, showsIndicators: false) {

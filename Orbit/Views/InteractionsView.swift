@@ -402,6 +402,7 @@ struct InteractionBatchEditSheet: View {
                 removeTagSection
                 deleteSection
             }
+            .formStyle(.grouped)
             .navigationTitle("\(selectedCount) Selected")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -434,6 +435,9 @@ struct InteractionBatchEditSheet: View {
                 Text("This will soft-delete the selected interactions. They can be permanently removed from Settings.")
             }
         }
+        #if os(macOS)
+        .frame(width: 450, height: 550)
+        #endif
     }
 
     private var saveButtonLabel: String {

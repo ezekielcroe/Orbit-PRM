@@ -168,6 +168,7 @@ struct ArtifactEditSheet: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit Artifact" : "Add Artifact")
+            .formStyle(.grouped)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -192,6 +193,9 @@ struct ArtifactEditSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(width: 450, height: 550)
+        #endif
     }
 
     // MARK: - Common Key Suggestions
@@ -307,10 +311,9 @@ struct ArtifactEditSheet: View {
 
     private func save() {
         let trimmedKey = key.trimmingCharacters(in: .whitespaces)
-        // FIX 3: Resolve the category — use explicit if set, otherwise auto-detect
         let resolvedCategory: String? = {
             if !category.isEmpty { return category }
-            return nil // Let ContactDetailView auto-categorize if no explicit category
+            return nil
         }()
 
         switch mode {
@@ -350,7 +353,6 @@ struct ArtifactEditSheet: View {
         contact.modifiedAt = Date()
         spotlightIndexer.index(contact: contact)
 
-        // FIX 1: Explicit save
         try? modelContext.save()
     }
 
@@ -359,7 +361,6 @@ struct ArtifactEditSheet: View {
             modelContext.delete(artifact)
             contact.modifiedAt = Date()
             spotlightIndexer.index(contact: contact)
-            // FIX 1: Explicit save
             try? modelContext.save()
         }
     }
