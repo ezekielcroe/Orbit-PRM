@@ -26,6 +26,8 @@ struct InteractionRowFramePreferenceKey: PreferenceKey {
 // MARK: - InteractionsView
 // A global, chronological ledger of all interactions across all contacts.
 // Supports scrub-to-select for batch tag editing and deletion.
+// Interactions sharing a batchID (constellation logs) are grouped into
+// a single row showing "Coffee with 4 contacts" instead of 4 identical rows.
 
 struct InteractionsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -41,7 +43,7 @@ struct InteractionsView: View {
     @State private var searchText = ""
     @State private var editingInteraction: Interaction?
 
-    // Selection State
+    // Selection State — tracks individual interaction IDs even when displayed as groups
     @State private var selectedInteractions: Set<UUID> = []
     @State private var showBatchEdit = false
 
@@ -63,15 +65,16 @@ struct InteractionsView: View {
         }
     }
 
-    private var groupedInteractions: [(key: String, interactions: [Interaction])] {
-        let grouped = Dictionary(grouping: filteredInteractions) { interaction in
+    /// Group filtered interactions by month, then collapse batch interactions within each month.
+    private var groupedInteractions: [(key: String, groups: [InteractionGroup])] {
+        let byMonth = Dictionary(grouping: filteredInteractions) { interaction in
             interaction.date.formatted(.dateTime.year().month(.wide))
         }
-        return grouped
-            .map { (key: $0.key, interactions: $0.value) }
+        return byMonth
+            .map { (key: $0.key, groups: InteractionGroup.group($0.value)) }
             .sorted { a, b in
-                let aDate = a.interactions.first?.date ?? .distantPast
-                let bDate = b.interactions.first?.date ?? .distantPast
+                let aDate = a.groups.first?.date ?? .distantPast
+                let bDate = b.groups.first?.date ?? .distantPast
                 return aDate > bDate
             }
     }
@@ -123,10 +126,10 @@ struct InteractionsView: View {
     private var interactionList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(groupedInteractions, id: \.key) { group in
+                ForEach(groupedInteractions, id: \.key) { monthGroup in
                     // Section Header
                     HStack {
-                        Text(group.key)
+                        Text(monthGroup.key)
                             .font(OrbitTypography.captionMedium)
                             .textCase(.uppercase)
                             .tracking(1.5)
@@ -137,14 +140,14 @@ struct InteractionsView: View {
                     .padding(.top, OrbitSpacing.lg)
                     .padding(.bottom, OrbitSpacing.xs)
 
-                    ForEach(group.interactions) { interaction in
-                        interactionRow(interaction)
+                    ForEach(monthGroup.groups) { group in
+                        interactionGroupRow(group)
                             .background(
                                 GeometryReader { geo in
                                     Color.clear.preference(
                                         key: InteractionRowFramePreferenceKey.self,
                                         value: [InteractionRowFrameData(
-                                            id: interaction.id,
+                                            id: group.id,
                                             frame: geo.frame(in: .named("InteractionTableSpace"))
                                         )]
                                     )
@@ -179,14 +182,17 @@ struct InteractionsView: View {
                     if let row = rowFrames.first(where: {
                         $0.frame.minY <= value.location.y && $0.frame.maxY >= value.location.y
                     }) {
-                        if dragSelectionState == nil {
-                            dragSelectionState = !selectedInteractions.contains(row.id)
-                        }
+                        // row.id is the group ID — find the group to select/deselect all its interactions
+                        if let group = findGroup(by: row.id) {
+                            if dragSelectionState == nil {
+                                dragSelectionState = !group.allIDs.isSubset(of: selectedInteractions)
+                            }
 
-                        if dragSelectionState == true {
-                            selectedInteractions.insert(row.id)
-                        } else {
-                            selectedInteractions.remove(row.id)
+                            if dragSelectionState == true {
+                                selectedInteractions.formUnion(group.allIDs)
+                            } else {
+                                selectedInteractions.subtract(group.allIDs)
+                            }
                         }
                     }
                 }
@@ -197,81 +203,72 @@ struct InteractionsView: View {
         )
     }
 
-    // MARK: - Interaction Row
+    // MARK: - Group Row (Checkbox + Standardized Content)
 
-    private func interactionRow(_ interaction: Interaction) -> some View {
-        let isSelected = selectedInteractions.contains(interaction.id)
+    private func interactionGroupRow(_ group: InteractionGroup) -> some View {
+        let isSelected = group.allIDs.isSubset(of: selectedInteractions)
+        let isPartiallySelected = !isSelected && !group.allIDs.isDisjoint(with: selectedInteractions)
 
         return HStack(alignment: .top, spacing: OrbitSpacing.md) {
             // Checkbox Column
             Button {
-                toggleSelection(for: interaction.id)
+                toggleGroupSelection(group)
             } label: {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                Image(systemName: checkboxIcon(selected: isSelected, partial: isPartiallySelected))
                     .font(.title3)
-                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .foregroundStyle(isSelected || isPartiallySelected ? .blue : .secondary)
                     .padding(.vertical, OrbitSpacing.sm)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            // Content Column (tap opens edit sheet)
-            VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
-                // Action & Contact
-                HStack(spacing: OrbitSpacing.xs) {
-                    Text(interaction.impulse)
-                        .font(OrbitTypography.bodyMedium)
-                        .foregroundStyle(OrbitColors.syntaxImpulse)
-
-                    if let contactName = interaction.contact?.name {
-                        Text("with")
-                            .font(OrbitTypography.caption)
-                            .foregroundStyle(.tertiary)
-                        Text(contactName)
-                            .font(OrbitTypography.bodyMedium)
-                            .foregroundStyle(.primary)
-                    }
-
-                    Spacer()
-
-                    Text(interaction.date.formatted(date: .abbreviated, time: .omitted))
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                }
-
-                // Note Content
-                if !interaction.content.isEmpty {
-                    Text(interaction.content)
-                        .font(OrbitTypography.body)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-
-                // Tags
-                if !interaction.tagNames.isEmpty {
-                    Text(interaction.tagList.map { "#\($0)" }.joined(separator: " "))
-                        .font(OrbitTypography.footnote)
-                        .foregroundStyle(OrbitColors.syntaxTag)
-                }
-            }
-            .padding(.vertical, OrbitSpacing.sm)
-            .contentShape(Rectangle())
+            // Standardized content
+            InteractionRowContent(
+                group: group,
+                showContactNames: true,
+                showChevron: false
+            )
             .onTapGesture {
-                editingInteraction = interaction
+                if group.isGroup {
+                    // For groups, navigate to the first contact
+                    if let contact = group.contacts.first {
+                        selectedContact = contact
+                    }
+                } else {
+                    // For single interactions, open the edit sheet
+                    editingInteraction = group.representative
+                }
             }
         }
         .padding(.horizontal, OrbitSpacing.md)
-        .background(isSelected ? Color.blue.opacity(0.05) : Color.clear)
+        .background(isSelected ? Color.blue.opacity(0.05) : (isPartiallySelected ? Color.blue.opacity(0.02) : Color.clear))
     }
 
-    private func toggleSelection(for id: UUID) {
+    private func checkboxIcon(selected: Bool, partial: Bool) -> String {
+        if selected { return "checkmark.square.fill" }
+        if partial { return "minus.square.fill" }
+        return "square"
+    }
+
+    // MARK: - Selection Helpers
+
+    private func toggleGroupSelection(_ group: InteractionGroup) {
         withAnimation(.easeInOut(duration: 0.2)) {
-            if selectedInteractions.contains(id) {
-                selectedInteractions.remove(id)
+            if group.allIDs.isSubset(of: selectedInteractions) {
+                selectedInteractions.subtract(group.allIDs)
             } else {
-                selectedInteractions.insert(id)
+                selectedInteractions.formUnion(group.allIDs)
             }
         }
+    }
+
+    private func findGroup(by id: UUID) -> InteractionGroup? {
+        for monthGroup in groupedInteractions {
+            if let group = monthGroup.groups.first(where: { $0.id == id }) {
+                return group
+            }
+        }
+        return nil
     }
 
     // MARK: - Floating Action Bar
@@ -325,18 +322,16 @@ struct InteractionsView: View {
 
         let targets = allFetched.filter { selectedInteractions.contains($0.id) }
 
-        // Handle delete (overrides everything else)
         if edit.deleteAll {
             for interaction in targets {
                 interaction.isDeleted = true
-                interaction.contact?.refreshLastContactDate()
+                interaction.contact?.refreshCachedFields()
             }
             try? modelContext.save()
             withAnimation { selectedInteractions.removeAll() }
             return
         }
 
-        // Add tags
         if !edit.tagsToAdd.isEmpty {
             for interaction in targets {
                 let existing = interaction.tagList.map { $0.lowercased() }
@@ -350,14 +345,9 @@ struct InteractionsView: View {
                     interaction.contact?.modifiedAt = Date()
                 }
             }
-
-            // Ensure tags exist in registry
-            for tagName in edit.tagsToAdd {
-                ensureTagExists(named: tagName)
-            }
+            TagRegistry.ensureTagsExist(named: edit.tagsToAdd, in: modelContext)
         }
 
-        // Remove tags
         if !edit.tagsToRemove.isEmpty {
             let removeSet = Set(edit.tagsToRemove.map { $0.lowercased() })
             for interaction in targets {
@@ -369,23 +359,7 @@ struct InteractionsView: View {
         }
 
         try? modelContext.save()
-        withAnimation {
-            selectedInteractions.removeAll()
-        }
-    }
-
-    private func ensureTagExists(named name: String) {
-        let searchName = name.lowercased()
-        let predicate = #Predicate<Tag> { tag in
-            tag.searchableName == searchName
-        }
-        var descriptor = FetchDescriptor<Tag>(predicate: predicate)
-        descriptor.fetchLimit = 1
-
-        if (try? modelContext.fetch(descriptor).first) == nil {
-            let tag = Tag(name: name)
-            modelContext.insert(tag)
-        }
+        withAnimation { selectedInteractions.removeAll() }
     }
 }
 
@@ -424,8 +398,8 @@ struct InteractionBatchEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                addTagsSection
-                removeTagsSection
+                addTagSection
+                removeTagSection
                 deleteSection
             }
             .navigationTitle("\(selectedCount) Selected")
@@ -447,10 +421,7 @@ struct InteractionBatchEditSheet: View {
                     .disabled(!edit.hasPendingChanges)
                 }
             }
-            .alert(
-                "Delete \(selectedCount) Interaction\(selectedCount == 1 ? "" : "s")?",
-                isPresented: $showDeleteConfirmation
-            ) {
+            .alert("Delete \(selectedCount) Interaction\(selectedCount == 1 ? "" : "s")?", isPresented: $showDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
                     edit.deleteAll = true
                     onApply(edit)
@@ -460,7 +431,7 @@ struct InteractionBatchEditSheet: View {
                     edit.deleteAll = false
                 }
             } message: {
-                Text("This will soft-delete the selected interactions. They can be permanently purged later from Settings.")
+                Text("This will soft-delete the selected interactions. They can be permanently removed from Settings.")
             }
         }
     }
@@ -473,41 +444,30 @@ struct InteractionBatchEditSheet: View {
 
     // MARK: - Add Tags Section
 
-    private var addTagsSection: some View {
+    private var addTagSection: some View {
         Section {
-            // Manual entry
             HStack {
-                TextField("New tag name", text: $newTagText)
+                TextField("Add a tag…", text: $newTagText)
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit { addTagFromTextField() }
 
-                Button {
-                    addTagFromTextField()
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(.blue)
-                }
-                .disabled(newTagText.trimmingCharacters(in: .whitespaces).isEmpty)
-                .buttonStyle(.plain)
+                Button("Add") { addTagFromTextField() }
+                    .disabled(newTagText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
-            // Quick-pick from existing tags
             if !allTags.isEmpty {
                 FlowLayout(spacing: OrbitSpacing.sm) {
                     ForEach(allTags.prefix(15)) { tag in
                         let isStaged = edit.tagsToAdd.contains(where: { $0.lowercased() == tag.searchableName })
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                if isStaged {
-                                    edit.tagsToAdd.removeAll { $0.lowercased() == tag.searchableName }
-                                } else {
-                                    // Also clear from remove list if present
-                                    edit.tagsToRemove.removeAll { $0.lowercased() == tag.searchableName }
-                                    edit.tagsToAdd.append(tag.name)
-                                }
+                            if isStaged {
+                                edit.tagsToAdd.removeAll { $0.lowercased() == tag.searchableName }
+                            } else {
+                                edit.tagsToRemove.removeAll { $0.lowercased() == tag.searchableName }
+                                edit.tagsToAdd.append(tag.name)
                             }
                         } label: {
                             Text("#\(tag.name)")
@@ -520,7 +480,6 @@ struct InteractionBatchEditSheet: View {
                 }
             }
 
-            // Show staged additions
             if !edit.tagsToAdd.isEmpty {
                 ForEach(edit.tagsToAdd, id: \.self) { tag in
                     HStack(spacing: OrbitSpacing.sm) {
@@ -545,27 +504,24 @@ struct InteractionBatchEditSheet: View {
         } header: {
             Text("Add Tags")
         } footer: {
-            Text("Selected tags will be added to all \(selectedCount) interaction\(selectedCount == 1 ? "" : "s"). Duplicates on individual interactions are skipped.")
+            Text("Selected tags will be added to all \(selectedCount) interaction\(selectedCount == 1 ? "" : "s").")
         }
     }
 
     // MARK: - Remove Tags Section
 
-    private var removeTagsSection: some View {
+    private var removeTagSection: some View {
         Section {
             if !allTags.isEmpty {
                 FlowLayout(spacing: OrbitSpacing.sm) {
                     ForEach(allTags.prefix(15)) { tag in
                         let isStaged = edit.tagsToRemove.contains(where: { $0.lowercased() == tag.searchableName })
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                if isStaged {
-                                    edit.tagsToRemove.removeAll { $0.lowercased() == tag.searchableName }
-                                } else {
-                                    // Also clear from add list if present
-                                    edit.tagsToAdd.removeAll { $0.lowercased() == tag.searchableName }
-                                    edit.tagsToRemove.append(tag.name)
-                                }
+                            if isStaged {
+                                edit.tagsToRemove.removeAll { $0.lowercased() == tag.searchableName }
+                            } else {
+                                edit.tagsToAdd.removeAll { $0.lowercased() == tag.searchableName }
+                                edit.tagsToRemove.append(tag.name)
                             }
                         } label: {
                             Text("#\(tag.name)")
@@ -582,7 +538,6 @@ struct InteractionBatchEditSheet: View {
                     .foregroundStyle(.tertiary)
             }
 
-            // Show staged removals
             if !edit.tagsToRemove.isEmpty {
                 ForEach(edit.tagsToRemove, id: \.self) { tag in
                     HStack(spacing: OrbitSpacing.sm) {

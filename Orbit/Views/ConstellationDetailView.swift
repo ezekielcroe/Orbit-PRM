@@ -64,23 +64,26 @@ struct ConstellationDetailView: View {
         return days.reduce(0, +) / days.count
     }
 
-    private var groupInteractions: [Interaction] {
-        activeMembers
-            .flatMap { $0.activeInteractions }
-            .sorted { $0.date > $1.date }
+    private var groupedMemberInteractions: [InteractionGroup] {
+        let allInteractions = activeMembers.flatMap { $0.activeInteractions }
+        return InteractionGroup.group(allInteractions)
     }
 
     private var sharedTagStats: [(name: String, count: Int)] {
-        var tagCounts: [String: Int] = [:]
-        for contact in activeMembers {
-            for tag in contact.aggregatedTags {
-                tagCounts[tag.name, default: 0] += tag.count
+            var tagCounts: [String: Int] = [:]
+            for contact in activeMembers {
+                let tags = contact.cachedTagSummary.split(separator: ",")
+                for tag in tags {
+                    let name = tag.trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty {
+                        tagCounts[name, default: 0] += 1
+                    }
+                }
             }
+            return tagCounts
+                .sorted { $0.value > $1.value }
+                .map { (name: $0.key, count: $0.value) }
         }
-        return tagCounts
-            .sorted { $0.value > $1.value }
-            .map { (name: $0.key, count: $0.value) }
-    }
 
     // MARK: - Body
 
@@ -232,7 +235,7 @@ struct ConstellationDetailView: View {
                     statBadge("\(driftingMembers.count)", label: "Drifting", icon: "exclamationmark.circle", color: .orange)
                 }
                 
-                statBadge("\(groupInteractions.count)", label: "Total logs", icon: "text.bubble")
+                statBadge("\(groupedMemberInteractions.count)", label: "Events", icon: "text.bubble")
             }
             .padding(.top, OrbitSpacing.xs)
         }
@@ -440,78 +443,49 @@ struct ConstellationDetailView: View {
     // MARK: - Activity Facet
 
     private var activityFacet: some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.xl) {
-            
-            // Shared Group Tags
-            if !sharedTagStats.isEmpty {
-                VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-                    Text("SHARED TAGS")
-                        .font(OrbitTypography.captionMedium)
-                        .tracking(1.5)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("TIMELINE")
+                                .font(OrbitTypography.captionMedium)
+                                .tracking(1.5)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, OrbitSpacing.lg)
 
-                    FlowLayout(spacing: OrbitSpacing.sm) {
-                        ForEach(sharedTagStats.prefix(10), id: \.name) { tag in
-                            HStack(spacing: 2) {
-                                Text("#\(tag.name)")
-                                    .font(OrbitTypography.caption)
-                                    .foregroundStyle(OrbitColors.syntaxTag)
-                                Text("×\(tag.count)")
-                                    .font(OrbitTypography.footnote)
-                                    .foregroundStyle(OrbitColors.syntaxTag.opacity(0.6))
+                        if groupedMemberInteractions.isEmpty {
+                            ContentUnavailableView {
+                                Label("No Activity", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                            } description: {
+                                Text("Log a group interaction to see it appear here and on every member's timeline.")
+                            } actions: {
+                                Button("Log Interaction") {
+                                    showAddInteraction = true
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(OrbitColors.syntaxTag.opacity(0.1), in: Capsule())
-                        }
-                    }
-                }
-                .padding(.horizontal, OrbitSpacing.lg)
-                .padding(.top, OrbitSpacing.md)
-            }
-
-            // Timeline
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text("TIMELINE")
-                        .font(OrbitTypography.captionMedium)
-                        .tracking(1.5)
-                        .foregroundStyle(.secondary)
-                    
-                }
-                .padding(.horizontal, OrbitSpacing.lg)
-
-                if groupInteractions.isEmpty {
-                    // UPDATE THE EMPTY STATE
-                    ContentUnavailableView {
-                        Label("No Activity", systemImage: "bubble.left.and.exclamationmark.bubble.right")
-                    } description: {
-                        Text("Log a group interaction to see it appear here and on every member's timeline.")
-                    } actions: {
-                        Button("Log Interaction") {
-                            showAddInteraction = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        }
-                    .padding(.top, OrbitSpacing.md)
-                } else {
-                    VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                        ForEach(groupInteractions) { interaction in
-                            InteractionRowView(interaction: interaction)
-                                .padding(OrbitSpacing.sm)
-                                .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                                .padding(.horizontal, OrbitSpacing.lg)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if let contact = interaction.contact {
-                                        selectedContact = contact // Keeps global state in sync
-                                        contactToView = contact   // Triggers the push
+                            .padding(.top, OrbitSpacing.md)
+                        } else {
+                            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+                                ForEach(groupedMemberInteractions) { group in
+                                    InteractionRowContent(
+                                        group: group,
+                                        showContactNames: true,
+                                        showChevron: false
+                                    )
+                                    .padding(OrbitSpacing.sm)
+                                    .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                                    .padding(.horizontal, OrbitSpacing.lg)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        if let contact = group.contacts.first {
+                                            selectedContact = contact
+                                            contactToView = contact
+                                        }
                                     }
                                 }
+                            }
                         }
                     }
-                }
-            }
-        }
         .padding(.top, OrbitSpacing.md)
         .padding(.bottom, OrbitSpacing.xxxl)
     }

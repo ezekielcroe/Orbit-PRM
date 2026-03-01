@@ -86,21 +86,23 @@ struct ConstellationInteractionSheet: View {
     }
 
     private func saveInteraction() {
-        let activeMembers = (constellation.contacts ?? []).filter { !$0.isArchived }
-        
-        for contact in activeMembers {
-            let interaction = Interaction(
-                impulse: impulse.trimmingCharacters(in: .whitespaces),
-                content: content.trimmingCharacters(in: .whitespaces),
-                date: date
-            )
-            interaction.tagNames = tagString.trimmingCharacters(in: .whitespaces)
-            interaction.contact = contact
+            let activeMembers = (constellation.contacts ?? []).filter { !$0.isArchived }
+            let batchID = UUID() // Shared across all interactions in this group log
             
-            modelContext.insert(interaction)
-            contact.refreshLastContactDate()
-            spotlightIndexer.index(contact: contact)
-        }
+            for contact in activeMembers {
+                let interaction = Interaction(
+                    impulse: impulse.trimmingCharacters(in: .whitespaces),
+                    content: content.trimmingCharacters(in: .whitespaces),
+                    date: date,
+                    batchID: batchID
+                )
+                interaction.tagNames = tagString.trimmingCharacters(in: .whitespaces)
+                interaction.contact = contact
+                
+                modelContext.insert(interaction)
+                contact.refreshCachedFields()
+                spotlightIndexer.index(contact: contact)
+            }
         
         // Ensure any new tag names are added to the registry
         for tagName in currentTagList {

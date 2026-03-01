@@ -312,21 +312,25 @@ struct ContactDetailView: View {
 
             if isExpanded {
                 VStack(spacing: OrbitSpacing.sm) {
-                    ForEach(group.interactions) { interaction in
-                        InteractionRowView(interaction: interaction)
-                            .padding(OrbitSpacing.sm)
-                            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                            .onTapGesture { editingInteraction = interaction }
-                            .contextMenu {
-                                Button("Edit", systemImage: "pencil") { editingInteraction = interaction }
-                                Button("Delete", systemImage: "trash", role: .destructive) {
-                                    interaction.isDeleted = true
-                                    contact.refreshLastContactDate()
-                                    try? modelContext.save()
+                                    ForEach(group.interactions) { interaction in
+                                        InteractionRowContent(
+                                            group: InteractionGroup(id: interaction.id, interactions: [interaction]),
+                                            showContactNames: false,
+                                            showChevron: true
+                                        )
+                                        .padding(OrbitSpacing.sm)
+                                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                                        .onTapGesture { editingInteraction = interaction }
+                                        .contextMenu {
+                                            Button("Edit", systemImage: "pencil") { editingInteraction = interaction }
+                                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                                interaction.isDeleted = true
+                                                contact.refreshCachedFields()
+                                                try? modelContext.save()
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                    }
-                }
                 .padding(.top, 4)
             }
         }

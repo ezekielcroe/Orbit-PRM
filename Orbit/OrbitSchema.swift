@@ -97,18 +97,6 @@ final class Contact {
         searchableName = name.lowercased()
     }
 
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │ FIX P0-1.1: refreshCachedFields() replaces the old         │
-    // │ refreshLastContactDate(). Updates ALL cached fields in one  │
-    // │ pass through the interaction graph.                          │
-    // │                                                             │
-    // │ Call this whenever interactions change:                      │
-    // │   - After logging an interaction                             │
-    // │   - After deleting/undeleting an interaction                 │
-    // │   - After editing interaction tags                           │
-    // │   - During data integrity checks                             │
-    // └─────────────────────────────────────────────────────────────┘
-
     func refreshCachedFields() {
         let active = (interactions ?? []).filter { !$0.isDeleted }
 
@@ -281,12 +269,18 @@ final class Interaction {
     var contact: Contact?
     var tagNames: String = ""
 
-    init(impulse: String, content: String = "", date: Date = Date()) {
+    /// Groups interactions created by the same command (e.g., constellation batch log).
+    /// All interactions sharing a batchID represent the same real-world event
+    /// across multiple contacts. nil for individually-logged interactions.
+    var batchID: UUID?
+
+    init(impulse: String, content: String = "", date: Date = Date(), batchID: UUID? = nil) {
         self.id = UUID()
         self.impulse = impulse
         self.content = content
         self.date = date
         self.isDeleted = false
+        self.batchID = batchID
     }
 
     var tagList: [String] {

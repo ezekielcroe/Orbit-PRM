@@ -282,6 +282,7 @@ struct CommandPaletteView: View {
             Group {
                 syntaxHelpRow("@Sarah !Coffee", "Log a coffee with Sarah")
                 syntaxHelpRow("@\"Sarah Connor\" !Coffee", "Multi-word names use quotes")
+                syntaxHelpRow("@Connor !Coffee", "Substring match — finds Sarah Connor")
                 syntaxHelpRow("@Tom > likes + Jazz", "Add Jazz to Tom's likes")
                 syntaxHelpRow("@Tom > likes - Jazz", "Remove Jazz from Tom's likes")
                 syntaxHelpRow("@Sarah !Call ^yesterday", "Log a call from yesterday")
@@ -289,7 +290,7 @@ struct CommandPaletteView: View {
                 syntaxHelpRow("@Sarah *Family", "Add Sarah to Family constellation")
                 syntaxHelpRow("@Sarah *-Family", "Remove Sarah from Family")
                 syntaxHelpRow("*Family !Call #chat", "Log a call for everyone in Family")
-                syntaxHelpRow("@Sarah", "Open Sarah's contact page")
+                syntaxHelpRow("@Sarah", "Search contacts matching 'Sarah'")
                 syntaxHelpRow("!undo", "Undo the last logged interaction")
             }
         }
@@ -361,89 +362,184 @@ struct CommandPaletteView: View {
 
         switch lastToken.kind {
         case .entity:
-            // Suggest matching contacts
-            let prefix = lastToken.value.lowercased()
-            suggestions = contacts
-                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
-                .prefix(6)
-                .map { contact in
-                    CommandSuggestion(
-                        icon: "person",
-                        label: contact.name,
-                        insertion: formattedEntityInsertion(for: contact.name),
-                        kind: .contact
-                    )
-                }
+            // Suggest matching contacts — substring match, ranked by match quality
+            let query = lastToken.value.lowercased()
+            let matches: [Contact]
+
+            if query.isEmpty {
+                matches = Array(contacts.prefix(6))
+            } else {
+                matches = contacts.filter { $0.searchableName.contains(query) }
+            }
+
+            // Rank: exact match first, then prefix, then substring-only
+            let ranked = matches.sorted { a, b in
+                let aRank = matchRank(a.searchableName, query: query)
+                let bRank = matchRank(b.searchableName, query: query)
+                if aRank != bRank { return aRank < bRank }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+
+            suggestions = ranked.prefix(6).map { contact in
+                // Show which part matched for substring hits
+                let subtitle = substringMatchHint(contact.searchableName, query: query, displayName: contact.name)
+                return CommandSuggestion(
+                    icon: "person",
+                    label: subtitle ?? contact.name,
+                    insertion: formattedEntityInsertion(for: contact.name),
+                    kind: .contact
+                )
+            }
 
         case .impulse:
-            // Suggest common impulse types
-            let prefix = lastToken.value.lowercased()
+            // Suggest common impulse types — substring match
+            let query = lastToken.value.lowercased()
             let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
-            suggestions = commonImpulses
-                .filter { $0.lowercased().hasPrefix(prefix) || prefix.isEmpty }
-                .map { imp in
-                    CommandSuggestion(
-                        icon: "bolt",
-                        label: imp,
-                        insertion: "!\(imp) ",
-                        kind: .impulse
-                    )
-                }
+
+            let matches: [String]
+            if query.isEmpty {
+                matches = commonImpulses
+            } else {
+                matches = commonImpulses.filter { $0.lowercased().contains(query) }
+            }
+
+            let ranked = matches.sorted { a, b in
+                let aRank = matchRank(a.lowercased(), query: query)
+                let bRank = matchRank(b.lowercased(), query: query)
+                if aRank != bRank { return aRank < bRank }
+                return a < b
+            }
+
+            suggestions = ranked.map { imp in
+                CommandSuggestion(
+                    icon: "bolt",
+                    label: imp,
+                    insertion: "!\(imp) ",
+                    kind: .impulse
+                )
+            }
 
         case .tag:
-            // Suggest existing tags
-            let prefix = lastToken.value.lowercased()
-            suggestions = tags
-                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
-                .prefix(6)
-                .map { tag in
-                    CommandSuggestion(
-                        icon: "tag",
-                        label: tag.name,
-                        insertion: "#\(tag.name) ",
-                        kind: .tag
-                    )
-                }
+            // Suggest existing tags — substring match
+            let query = lastToken.value.lowercased()
+            let matches: [Tag]
+
+            if query.isEmpty {
+                matches = Array(tags.prefix(6))
+            } else {
+                matches = tags.filter { $0.searchableName.contains(query) }
+            }
+
+            let ranked = matches.sorted { a, b in
+                let aRank = matchRank(a.searchableName, query: query)
+                let bRank = matchRank(b.searchableName, query: query)
+                if aRank != bRank { return aRank < bRank }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+
+            suggestions = ranked.prefix(6).map { tag in
+                CommandSuggestion(
+                    icon: "tag",
+                    label: tag.name,
+                    insertion: "#\(tag.name) ",
+                    kind: .tag
+                )
+            }
 
         case .constellation:
-            // Suggest existing constellations
+            // Suggest existing constellations — substring match
             let rawValue = lastToken.value
             let isRemoval = rawValue.hasPrefix("-")
-            let prefix = (isRemoval ? String(rawValue.dropFirst()) : rawValue).lowercased()
-            suggestions = constellations
-                .filter { $0.searchableName.hasPrefix(prefix) || prefix.isEmpty }
-                .prefix(6)
-                .map { constellation in
-                    CommandSuggestion(
-                        icon: "star.circle",
-                        label: (isRemoval ? "Remove from " : "") + constellation.name,
-                        insertion: formattedConstellationInsertion(for: constellation.name, removal: isRemoval),
-                        kind: .constellation
-                    )
-                }
+            let query = (isRemoval ? String(rawValue.dropFirst()) : rawValue).lowercased()
+
+            let matches: [Constellation]
+            if query.isEmpty {
+                matches = Array(constellations.prefix(6))
+            } else {
+                matches = constellations.filter { $0.searchableName.contains(query) }
+            }
+
+            let ranked = matches.sorted { a, b in
+                let aRank = matchRank(a.searchableName, query: query)
+                let bRank = matchRank(b.searchableName, query: query)
+                if aRank != bRank { return aRank < bRank }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+
+            suggestions = ranked.prefix(6).map { constellation in
+                CommandSuggestion(
+                    icon: "star.circle",
+                    label: (isRemoval ? "Remove from " : "") + constellation.name,
+                    insertion: formattedConstellationInsertion(for: constellation.name, removal: isRemoval),
+                    kind: .constellation
+                )
+            }
 
         case .artifactKey:
-            // Suggest existing artifact keys for the selected contact
+            // Suggest existing artifact keys — substring match
             if let entityToken = tokens.first(where: { $0.kind == .entity }),
                let contact = executor.findContact(named: entityToken.value, in: modelContext) {
-                let prefix = lastToken.value.lowercased()
+                let query = lastToken.value.lowercased()
                 let existingKeys = (contact.artifacts ?? []).map(\.key)
-                suggestions = existingKeys
-                    .filter { $0.lowercased().hasPrefix(prefix) || prefix.isEmpty }
-                    .map { key in
-                        CommandSuggestion(
-                            icon: "key",
-                            label: key,
-                            insertion: "> \(key): ",
-                            kind: .artifactKey
-                        )
-                    }
+
+                let matches: [String]
+                if query.isEmpty {
+                    matches = existingKeys
+                } else {
+                    matches = existingKeys.filter { $0.lowercased().contains(query) }
+                }
+
+                let ranked = matches.sorted { a, b in
+                    let aRank = matchRank(a.lowercased(), query: query)
+                    let bRank = matchRank(b.lowercased(), query: query)
+                    if aRank != bRank { return aRank < bRank }
+                    return a < b
+                }
+
+                suggestions = ranked.map { key in
+                    CommandSuggestion(
+                        icon: "key",
+                        label: key,
+                        insertion: "> \(key): ",
+                        kind: .artifactKey
+                    )
+                }
             }
 
         default:
             break
         }
     }
+    
+    /// Returns a rank for how well `candidate` matches `query`.
+    /// Lower is better: 0 = exact, 1 = prefix, 2 = word-boundary substring, 3 = substring.
+    private func matchRank(_ candidate: String, query: String) -> Int {
+        guard !query.isEmpty else { return 3 }
+        if candidate == query { return 0 }
+        if candidate.hasPrefix(query) { return 1 }
+
+        // Check if query matches at a word boundary (e.g., "connor" in "sarah connor")
+        // This handles the common case of searching by last name or second word.
+        let words = candidate.split(separator: " ")
+        if words.dropFirst().contains(where: { $0.hasPrefix(query) }) {
+            return 2
+        }
+
+            return 3
+        }
+
+        /// For substring-only matches, returns a hint showing the match context.
+        /// e.g., if query is "con" and name is "Sarah Connor", returns "Sarah Connor"
+        ///        (no change needed — name is clear enough)
+        /// Returns nil for exact/prefix matches where the name alone is sufficient.
+        private func substringMatchHint(_ searchable: String, query: String, displayName: String) -> String? {
+            guard !query.isEmpty else { return nil }
+            // If it's a prefix match, the name alone is clear
+            if searchable.hasPrefix(query) { return nil }
+            // For substring matches, the name is still clear since we show the full name.
+            // But we could add a match indicator in the future if needed.
+            return nil
+        }
 
     private func applySuggestion(_ suggestion: CommandSuggestion) {
         // Replace the text from the last operator to the cursor with the suggestion
