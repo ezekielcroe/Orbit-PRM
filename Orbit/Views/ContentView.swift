@@ -53,12 +53,9 @@ struct ContentView: View {
                     NavigationLink(value: NavTab.people) {
                         Label("People", systemImage: "person.2")
                     }
-                    if !constellations.isEmpty {
-                        NavigationLink(value: NavTab.constellations) {
-                            Label("Constellations", systemImage: "star")
-                        }
+                    NavigationLink(value: NavTab.constellations) {
+                        Label("Constellations", systemImage: "star")
                     }
-                    // 2. ADD: Interactions Sidebar Link
                     NavigationLink(value: NavTab.interactions) {
                         Label("Activity", systemImage: "text.bubble")
                     }
