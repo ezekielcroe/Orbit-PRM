@@ -15,7 +15,7 @@ struct QuickInteractionSheet: View {
     @State private var content = ""
     @State private var date = Date()
 
-    private let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Walk", "Play"]
+    private let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Play"]
 
     var body: some View {
         NavigationStack {

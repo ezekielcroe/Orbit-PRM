@@ -33,30 +33,36 @@ struct Token: Identifiable, Equatable {
 enum ParsedCommand {
     /// Log an interaction: @Name !Action #Tag "note" ^time
     case logInteraction(
-        contactName: String,
+        contactNames: [String],
         impulse: String,
         tags: [String],
         note: String?,
         timeModifier: String?
     )
 
-    /// Set a singleton artifact: @Name > key: value
-    case setArtifact(contactName: String, key: String, value: String)
+    /// Set a singleton artifact: @Name1 @Name2 > key: value
+    case setArtifact(contactNames: [String], key: String, value: String)
 
-    /// Append to an array artifact: @Name > key + value
-    case appendArtifact(contactName: String, key: String, value: String, forceConvert: Bool)
+    /// Append to an array artifact: @Name1 @Name2 > key + value
+    case appendArtifact(contactNames: [String], key: String, value: String, forceConvert: Bool)
 
-    /// Remove from an array artifact: @Name > key - value
-    case removeArtifact(contactName: String, key: String, value: String)
+    /// Remove from an array artifact: @Name1 @Name2 > key - value
+    case removeArtifact(contactNames: [String], key: String, value: String)
 
-    /// Delete an artifact key: @Name > key: void
-    case deleteArtifact(contactName: String, key: String)
+    /// Delete an artifact key: @Name1 @Name2 > key: void
+    case deleteArtifact(contactNames: [String], key: String)
 
-    /// Add a contact to a constellation: @Name *GroupName
-    case addToConstellation(contactName: String, constellationName: String)
+    /// Add contacts to a constellation: @Name1 @Name2 *GroupName
+    case addToConstellation(contactNames: [String], constellationName: String)
 
-    /// Remove a contact from a constellation: @Name *-GroupName
-    case removeFromConstellation(contactName: String, constellationName: String)
+    /// Remove contacts from a constellation: @Name1 @Name2 *-GroupName
+    case removeFromConstellation(contactNames: [String], constellationName: String)
+
+    /// Archive contacts: @Name1 @Name2 !archive
+    case archiveContact(contactNames: [String])
+
+    /// Restore contacts from archive: @Name1 @Name2 !restore
+    case restoreContact(contactNames: [String])
 
     /// Log an interaction for every contact in a constellation: *GroupName !Action #tag "note"
     case logConstellationInteraction(
@@ -66,12 +72,6 @@ enum ParsedCommand {
         note: String?,
         timeModifier: String?
     )
-
-    /// Archive a contact: @Name !archive
-    case archiveContact(contactName: String)
-
-    /// Restore a contact from archive: @Name !restore
-    case restoreContact(contactName: String)
 
     /// Search within a contact's artifacts: @Name searchquery
     case searchContact(name: String, query: String)

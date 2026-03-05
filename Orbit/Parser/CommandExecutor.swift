@@ -23,16 +23,16 @@ final class CommandExecutor {
     
     /// The last save error, if any. UI can observe this.
     private(set) var lastSaveError: String?
-    
+
     // MARK: - Execute
     
     func execute(_ command: ParsedCommand, in context: ModelContext) -> CommandResult {
         let result: CommandResult
         
         switch command {
-        case .logInteraction(let name, let impulse, let tags, let note, let timeMod):
+        case .logInteraction(let names, let impulse, let tags, let note, let timeMod):
             result = executeLogInteraction(
-                contactName: name,
+                contactNames: names,
                 impulse: impulse,
                 tags: tags,
                 note: note,
@@ -40,29 +40,29 @@ final class CommandExecutor {
                 in: context
             )
             
-        case .setArtifact(let name, let key, let value):
-            result = executeSetArtifact(contactName: name, key: key, value: value, in: context)
+        case .setArtifact(let names, let key, let value):
+            result = executeSetArtifact(contactNames: names, key: key, value: value, in: context)
             
-        case .appendArtifact(let name, let key, let value, let forceConvert):
-            result = executeAppendArtifact(contactName: name, key: key, value: value, forceConvert: forceConvert, in: context)
+        case .appendArtifact(let names, let key, let value, let forceConvert):
+            result = executeAppendArtifact(contactNames: names, key: key, value: value, forceConvert: forceConvert, in: context)
             
-        case .removeArtifact(let name, let key, let value):
-            result = executeRemoveArtifact(contactName: name, key: key, value: value, in: context)
+        case .removeArtifact(let names, let key, let value):
+            result = executeRemoveArtifact(contactNames: names, key: key, value: value, in: context)
             
-        case .deleteArtifact(let name, let key):
-            result = executeDeleteArtifact(contactName: name, key: key, in: context)
+        case .deleteArtifact(let names, let key):
+            result = executeDeleteArtifact(contactNames: names, key: key, in: context)
             
-        case .archiveContact(let name):
-            result = executeArchive(contactName: name, archive: true, in: context)
+        case .archiveContact(let names):
+            result = executeArchive(contactNames: names, archive: true, in: context)
             
-        case .restoreContact(let name):
-            result = executeArchive(contactName: name, archive: false, in: context)
+        case .restoreContact(let names):
+            result = executeArchive(contactNames: names, archive: false, in: context)
             
-        case .addToConstellation(let name, let constellationName):
-            result = executeAddToConstellation(contactName: name, constellationName: constellationName, in: context)
+        case .addToConstellation(let names, let constellationName):
+            result = executeAddToConstellation(contactNames: names, constellationName: constellationName, in: context)
             
-        case .removeFromConstellation(let name, let constellationName):
-            result = executeRemoveFromConstellation(contactName: name, constellationName: constellationName, in: context)
+        case .removeFromConstellation(let names, let constellationName):
+            result = executeRemoveFromConstellation(contactNames: names, constellationName: constellationName, in: context)
             
         case .logConstellationInteraction(let constellationName, let impulse, let tags, let note, let timeMod):
             result = executeLogConstellationInteraction(
@@ -85,9 +85,7 @@ final class CommandExecutor {
             result = CommandResult(success: false, message: reason, affectedContact: nil)
         }
         
-        // FIX P1-2.1: Single save point with error capture.
-        // All mutating methods above modify objects without saving.
-        // We save once here, and capture any errors.
+        // Single save point with error capture.
         if result.success {
             if !PersistenceHelper.saveWithLogging(context, operation: "execute command") {
                 lastSaveError = "Changes may not have been saved."
@@ -103,204 +101,232 @@ final class CommandExecutor {
     // MARK: - Interaction Logging
     
     private func executeLogInteraction(
-        contactName: String,
+        contactNames: [String],
         impulse: String,
         tags: [String],
         note: String?,
         timeModifier: String?,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToLog: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(
+                    success: false,
+                    message: ambiguity ?? "Contact '\(name)' not found. Create them first.",
+                    affectedContact: nil
+                )
+            }
+            contactsToLog.append(contact)
         }
         
         let date = CommandParser.resolveTimeModifier(timeModifier)
+        let batchID = contactsToLog.count > 1 ? UUID() : nil
         
-        let interaction = Interaction(
-            impulse: impulse,
-            content: note ?? "",
-            date: date
-        )
-        interaction.tagNames = tags.joined(separator: ", ")
-        interaction.contact = contact
+        for contact in contactsToLog {
+            let interaction = Interaction(
+                impulse: impulse,
+                content: note ?? "",
+                date: date,
+                batchID: batchID
+            )
+            interaction.tagNames = tags.joined(separator: ", ")
+            interaction.contact = contact
+            context.insert(interaction)
+            
+            contact.refreshCachedFields()
+            lastCreatedInteraction = interaction
+        }
         
-        context.insert(interaction)
-        
-        // FIX P0-1.1: Use refreshCachedFields() to update all caches in one pass
-        contact.refreshCachedFields()
-        
-        // FIX P2-3.5: Use consolidated TagRegistry
         TagRegistry.ensureTagsExist(named: tags, in: context)
         
-        lastCreatedInteraction = interaction
-        
         let dateStr = timeModifier != nil ? " on \(date.formatted(date: .abbreviated, time: .omitted))" : ""
+        let namesString = contactsToLog.count == 1 ? contactsToLog[0].name : "\(contactsToLog.count) contacts"
+        
         return CommandResult(
             success: true,
-            message: "Logged \(impulse) with \(contact.name)\(dateStr)",
-            affectedContact: contact
+            message: "Logged \(impulse) with \(namesString)\(dateStr)",
+            affectedContact: contactsToLog.first
         )
     }
     
     // MARK: - Artifact Operations
     
     private func executeSetArtifact(
-        contactName: String,
+        contactNames: [String],
         key: String,
         value: String,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
         let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
         
-        // Find existing artifact with this key, or create new
-        if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
-            existing.setValue(value)
-            if let newCategory = parsedCategory { existing.category = newCategory }
-        } else {
-            let artifact = Artifact(key: parsedKey, value: value, category: parsedCategory)
-            artifact.contact = contact
-            context.insert(artifact)
+        for contact in contactsToUpdate {
+            if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+                existing.setValue(value)
+                if let newCategory = parsedCategory { existing.category = newCategory }
+            } else {
+                let artifact = Artifact(key: parsedKey, value: value, category: parsedCategory)
+                artifact.contact = contact
+                context.insert(artifact)
+            }
+            contact.refreshArtifactCache()
         }
         
-        contact.refreshArtifactCache()
-        
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "Set \(contact.name)'s \(parsedKey) to \(value)",
-            affectedContact: contact
+            message: "Set \(parsedKey) to \(value) for \(namesString)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
     private func executeAppendArtifact(
-        contactName: String,
+        contactNames: [String],
         key: String,
         value: String,
         forceConvert: Bool,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
         let (parsedCategory, parsedKey) = parseCategoryAndKey(from: key)
         
-        if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
-            if !existing.isArray && !forceConvert {
-                let retryCommand = ParsedCommand.appendArtifact(contactName: contactName, key: key, value: value, forceConvert: true)
-                return CommandResult(success: false, message: "Requires conversion confirmation.", affectedContact: nil, requiresConversionPrompt: retryCommand)
+        // Check for conversion requirement across all targets first
+        for contact in contactsToUpdate {
+            if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+                if !existing.isArray && !forceConvert {
+                    let retryCommand = ParsedCommand.appendArtifact(contactNames: contactNames, key: key, value: value, forceConvert: true)
+                    return CommandResult(success: false, message: "Requires conversion confirmation.", affectedContact: nil, requiresConversionPrompt: retryCommand)
+                }
             }
-            existing.appendValue(value)
-            if let newCategory = parsedCategory { existing.category = newCategory }
-        } else {
-            let artifact = Artifact(key: parsedKey, value: "", isArray: true, category: parsedCategory)
-            artifact.contact = contact
-            context.insert(artifact)
-            artifact.appendValue(value)
         }
         
-        contact.refreshArtifactCache()
-        return CommandResult(success: true, message: "Added \(value) to \(contact.name)'s \(parsedKey)", affectedContact: contact)
+        for contact in contactsToUpdate {
+            if let existing = contact.artifacts?.first(where: { $0.searchableKey == parsedKey.lowercased() }) {
+                existing.appendValue(value)
+                if let newCategory = parsedCategory { existing.category = newCategory }
+            } else {
+                let artifact = Artifact(key: parsedKey, value: "", isArray: true, category: parsedCategory)
+                artifact.contact = contact
+                context.insert(artifact)
+                artifact.appendValue(value)
+            }
+            contact.refreshArtifactCache()
+        }
+        
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
+        return CommandResult(success: true, message: "Added \(value) to \(parsedKey) for \(namesString)", affectedContact: contactsToUpdate.first)
     }
     
     private func executeRemoveArtifact(
-        contactName: String,
+        contactNames: [String],
         key: String,
         value: String,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
-        guard let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) else {
-            return CommandResult(success: false, message: "\(contact.name) has no '\(key)' artifact.", affectedContact: contact)
+        for contact in contactsToUpdate {
+            guard let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) else {
+                continue
+            }
+            existing.removeValue(value)
         }
         
-        existing.removeValue(value)
-        
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "Removed \(value) from \(contact.name)'s \(key)",
-            affectedContact: contact
+            message: "Removed \(value) from \(key) for \(namesString)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
     private func executeDeleteArtifact(
-        contactName: String,
+        contactNames: [String],
         key: String,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
-        guard let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) else {
-            return CommandResult(success: false, message: "\(contact.name) has no '\(key)' artifact.", affectedContact: contact)
+        for contact in contactsToUpdate {
+            if let existing = contact.artifacts?.first(where: { $0.searchableKey == key.lowercased() }) {
+                context.delete(existing)
+                contact.refreshArtifactCache()
+            }
         }
         
-        context.delete(existing)
-        contact.refreshArtifactCache()
-        
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "Deleted \(contact.name)'s \(key)",
-            affectedContact: contact
+            message: "Deleted \(key) for \(namesString)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
     // MARK: - Archive / Restore
     
     private func executeArchive(
-        contactName: String,
+        contactNames: [String],
         archive: Bool,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, includeArchived: true, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, includeArchived: true, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
-        contact.isArchived = archive
-        contact.modifiedAt = Date()
+        for contact in contactsToUpdate {
+            contact.isArchived = archive
+            contact.modifiedAt = Date()
+        }
         
         let action = archive ? "archived" : "restored"
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "\(contact.name) \(action)",
-            affectedContact: contact
+            message: "\(namesString) \(action)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
@@ -315,7 +341,7 @@ final class CommandExecutor {
         in context: ModelContext
     ) -> CommandResult {
         var constellationAmbiguity: String?
-            guard let constellation = findConstellation(named: constellationName, in: context, ambiguityMessage: &constellationAmbiguity) else {
+        guard let constellation = findConstellation(named: constellationName, in: context, ambiguityMessage: &constellationAmbiguity) else {
                 return CommandResult(
                     success: false,
                     message: constellationAmbiguity ?? "Constellation '\(constellationName)' not found.",
@@ -333,7 +359,7 @@ final class CommandExecutor {
         }
         
         let date = CommandParser.resolveTimeModifier(timeModifier)
-        let batchID = UUID() // Shared across all interactions in this constellation log
+        let batchID = UUID()
         
         for contact in members {
             let interaction = Interaction(
@@ -345,106 +371,99 @@ final class CommandExecutor {
             interaction.tagNames = tags.joined(separator: ", ")
             interaction.contact = contact
             context.insert(interaction)
+            
             contact.refreshCachedFields()
         }
         
-        // FIX P2-3.5: Use consolidated TagRegistry with batch insert
         TagRegistry.ensureTagsExist(named: tags, in: context)
         
         let dateStr = timeModifier != nil ? " on \(date.formatted(date: .abbreviated, time: .omitted))" : ""
         return CommandResult(
             success: true,
-            message: "Logged \(impulse) with \(String(describing: members.count)) contacts in ✦ \(constellation.name)\(dateStr)",
+            message: "Logged \(impulse) with \(members.count) contacts in ✦ \(constellation.name)\(dateStr)",
             affectedContact: members.first
         )
     }
     
     private func executeAddToConstellation(
-        contactName: String,
+        contactNames: [String],
         constellationName: String,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
         let constellation = findOrCreateConstellation(named: constellationName, in: context)
         
-        // Check if already a member
-        if contact.constellations?.contains(where: { $0.id == constellation.id }) ?? false {
-            return CommandResult(
-                success: true,
-                message: "\(contact.name) is already in ✦ \(constellation.name)",
-                affectedContact: contact
-            )
+        for contact in contactsToUpdate {
+            if contact.constellations?.contains(where: { $0.id == constellation.id }) ?? false {
+                continue
+            }
+            if contact.constellations == nil { contact.constellations = [] }
+            contact.constellations?.append(constellation)
+            contact.modifiedAt = Date()
         }
-        if contact.constellations == nil {
-            contact.constellations = []
-        }
-        contact.constellations?.append(constellation)
-        contact.modifiedAt = Date()
         
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "Added \(contact.name) to ✦ \(constellation.name)",
-            affectedContact: contact
+            message: "Added \(namesString) to ✦ \(constellation.name)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
     private func executeRemoveFromConstellation(
-        contactName: String,
+        contactNames: [String],
         constellationName: String,
         in context: ModelContext
     ) -> CommandResult {
+        var contactsToUpdate: [Contact] = []
         var ambiguity: String?
-        guard let contact = findContact(named: contactName, in: context, ambiguityMessage: &ambiguity) else {
-            return CommandResult(
-                success: false,
-                message: ambiguity ?? "Contact '\(contactName)' not found. Create them first.",
-                affectedContact: nil
-            )
+
+        for name in contactNames {
+            guard let contact = findContact(named: name, in: context, ambiguityMessage: &ambiguity) else {
+                return CommandResult(success: false, message: ambiguity ?? "Contact '\(name)' not found.", affectedContact: nil)
+            }
+            contactsToUpdate.append(contact)
         }
         
         let searchName = constellationName.lowercased()
-        // Three-tier match on the contact's constellation memberships
-        let memberships = contact.constellations ?? []
-        let exactIndex = memberships.firstIndex(where: { $0.searchableName == searchName })
-        let prefixIndex = memberships.firstIndex(where: { $0.searchableName.hasPrefix(searchName) })
-        let substringIndex = memberships.firstIndex(where: { $0.searchableName.contains(searchName) })
-        guard let index = exactIndex ?? prefixIndex ?? substringIndex else {
-            return CommandResult(
-                success: false,
-                message: "\(contact.name) is not in a constellation named '\(constellationName)'.",
-                affectedContact: contact
-            )
+        var matchedConstellationName = constellationName
+        
+        for contact in contactsToUpdate {
+            let memberships = contact.constellations ?? []
+            let exactIndex = memberships.firstIndex(where: { $0.searchableName == searchName })
+            let prefixIndex = memberships.firstIndex(where: { $0.searchableName.hasPrefix(searchName) })
+            let substringIndex = memberships.firstIndex(where: { $0.searchableName.contains(searchName) })
+            
+            if let index = exactIndex ?? prefixIndex ?? substringIndex {
+                matchedConstellationName = contact.constellations?[index].name ?? "Unknown"
+                contact.constellations?.remove(at: index)
+                contact.modifiedAt = Date()
+            }
         }
         
-        let name = contact.constellations?[index].name ?? "Unknown"
-        contact.constellations?.remove(at: index)
-        contact.modifiedAt = Date()
-        
+        let namesString = contactsToUpdate.count == 1 ? contactsToUpdate[0].name : "\(contactsToUpdate.count) contacts"
         return CommandResult(
             success: true,
-            message: "Removed \(contact.name) from ✦ \(name)",
-            affectedContact: contact
+            message: "Removed \(namesString) from ✦ \(matchedConstellationName)",
+            affectedContact: contactsToUpdate.first
         )
     }
     
-    /// Find a constellation by name (with substring matching), or create one if not found.
-    /// For creation, uses the original (un-lowercased) name.
     private func findOrCreateConstellation(named name: String, in context: ModelContext) -> Constellation {
         var ambiguity: String?
         if let existing = findConstellation(named: name, in: context, ambiguityMessage: &ambiguity) {
             return existing
         }
 
-        // If ambiguous (multiple matches), don't create a new one — use exact match as tiebreaker.
-        // This prevents accidentally creating "Family" when "Family Friends" and "Family" both exist.
         let exactName = name.lowercased()
         let exactPredicate = #Predicate<Constellation> { $0.searchableName == exactName }
         var exactDescriptor = FetchDescriptor<Constellation>(predicate: exactPredicate)
@@ -465,9 +484,7 @@ final class CommandExecutor {
             return CommandResult(success: false, message: "Nothing to undo.", affectedContact: nil)
         }
         
-        // Soft delete — preserves the record but hides it
         interaction.isDeleted = true
-        // FIX P0-1.1: Update caches after undo
         interaction.contact?.refreshCachedFields()
         lastCreatedInteraction = nil
         
@@ -490,15 +507,6 @@ final class CommandExecutor {
     
     // MARK: - Helpers
     
-    /// Find a contact by name using three-tier matching:
-    ///   1. Exact match (case-insensitive)
-    ///   2. Prefix match
-    ///   3. Substring match (e.g., "Connor" matches "Sarah Connor")
-    ///
-    /// If a tier produces exactly one result, it's returned.
-    /// If a tier produces multiple results, nil is returned (ambiguous).
-    /// The `ambiguityMessage` inout parameter is set when multiple
-    /// matches are found, so the caller can surface a helpful error.
     func findContact(
         named name: String,
         in context: ModelContext,
@@ -526,7 +534,7 @@ final class CommandExecutor {
             return exactMatch
         }
         
-        // Tier 2: Prefix match (e.g., "sar" → "sarah connor")
+        // Tier 2: Prefix match
         let prefixPredicate: Predicate<Contact>
         if includeArchived {
             prefixPredicate = #Predicate<Contact> { contact in
@@ -549,7 +557,7 @@ final class CommandExecutor {
             return nil
         }
         
-        // Tier 3: Substring match (e.g., "connor" → "sarah connor")
+        // Tier 3: Substring match
         let substringPredicate: Predicate<Contact>
         if includeArchived {
             substringPredicate = #Predicate<Contact> { contact in
@@ -575,27 +583,22 @@ final class CommandExecutor {
         return nil
     }
     
-    /// Convenience overload that discards the ambiguity message (backward compatible).
     func findContact(named name: String, in context: ModelContext, includeArchived: Bool = false) -> Contact? {
         var ambiguity: String?
         return findContact(named: name, in: context, includeArchived: includeArchived, ambiguityMessage: &ambiguity)
     }
     
-    /// Fetch contacts matching a search string (for autocomplete).
-    /// Uses substring matching and ranks results: prefix matches first, then substring.
     func findContactMatches(prefix: String, in context: ModelContext, limit: Int = 5) -> [Contact] {
         let searchTerm = prefix.lowercased()
         
-        // Fetch all substring matches
         let predicate = #Predicate<Contact> { contact in
             contact.searchableName.contains(searchTerm) && contact.isArchived == false
         }
         var descriptor = FetchDescriptor<Contact>(predicate: predicate)
-        descriptor.fetchLimit = limit * 2 // Fetch extra to allow ranking
+        descriptor.fetchLimit = limit * 2
         
         let results = (try? context.fetch(descriptor)) ?? []
         
-        // Rank: prefix matches first, then substring-only matches
         let ranked = results.sorted { a, b in
             let aPrefix = a.searchableName.hasPrefix(searchTerm)
             let bPrefix = b.searchableName.hasPrefix(searchTerm)
@@ -605,12 +608,6 @@ final class CommandExecutor {
         return Array(ranked.prefix(limit))
     }
     
-    /// Find a constellation by name using three-tier matching:
-    ///   1. Exact match (case-insensitive)
-    ///   2. Prefix match
-    ///   3. Substring match
-    ///
-    /// Returns nil if no match or ambiguous (multiple matches at same tier).
     private func findConstellation(
         named name: String,
         in context: ModelContext,
@@ -618,7 +615,6 @@ final class CommandExecutor {
     ) -> Constellation? {
         let searchName = name.lowercased()
 
-        // Tier 1: Exact match
         let exactPredicate = #Predicate<Constellation> { $0.searchableName == searchName }
         var exactDescriptor = FetchDescriptor<Constellation>(predicate: exactPredicate)
         exactDescriptor.fetchLimit = 1
@@ -627,7 +623,6 @@ final class CommandExecutor {
             return exact
         }
 
-        // Tier 2: Prefix match
         let prefixPredicate = #Predicate<Constellation> { $0.searchableName.starts(with: searchName) }
         let prefixResults = (try? context.fetch(FetchDescriptor<Constellation>(predicate: prefixPredicate))) ?? []
 
@@ -638,7 +633,6 @@ final class CommandExecutor {
             return nil
         }
 
-        // Tier 3: Substring match
         let substringPredicate = #Predicate<Constellation> { $0.searchableName.contains(searchName) }
         let substringResults = (try? context.fetch(FetchDescriptor<Constellation>(predicate: substringPredicate))) ?? []
 

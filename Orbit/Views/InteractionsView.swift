@@ -51,6 +51,9 @@ struct InteractionsView: View {
     @State private var rowFrames: [InteractionRowFrameData] = []
     @State private var dragSelectionState: Bool? = nil
     @State private var isScrubbing = false
+    
+    @Query private var allConstellations: [Constellation]
+    @State private var constellationToView: Constellation?
 
     // MARK: - Computed Data
 
@@ -118,6 +121,9 @@ struct InteractionsView: View {
                     showBatchEdit = false
                 }
             )
+        }
+        .navigationDestination(item: $constellationToView) { constellation in
+            ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
         }
     }
 
@@ -230,12 +236,13 @@ struct InteractionsView: View {
             )
             .onTapGesture {
                 if group.isGroup {
-                    // For groups, navigate to the first contact
-                    if let contact = group.contacts.first {
-                        selectedContact = contact
+                    if let mutualName = group.mutualConstellationName,
+                       let constellation = allConstellations.first(where: { $0.name == mutualName }) {
+                        constellationToView = constellation
+                    } else {
+                        editingInteraction = group.representative
                     }
                 } else {
-                    // For single interactions, open the edit sheet
                     editingInteraction = group.representative
                 }
             }

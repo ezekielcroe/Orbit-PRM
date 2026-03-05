@@ -21,7 +21,7 @@ struct ConstellationInteractionSheet: View {
     @State private var date = Date()
     @State private var tagString = ""
 
-    private let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
+    private let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Play"]
     
     @Query(sort: \Tag.name) private var allTags: [Tag]
 

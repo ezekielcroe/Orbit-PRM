@@ -16,11 +16,6 @@ import Foundation
 //   ^ → time modifier
 //   "..." → quoted free text
 //
-// FIX 2: Multi-word name support
-// - @"Sarah Connor" — quoted form for explicit multi-word names
-// - @Sarah-Connor — hyphenated names work as before (no spaces)
-// - Autocomplete inserts quoted form when name contains spaces
-// - Error messages corrected for accuracy
 
 final class CommandParser {
 
@@ -134,19 +129,21 @@ final class CommandParser {
 
         // Must have an entity (@contact)
         // FIX 2: Improved error message — the @ token doesn't need to be first
-        guard let entityToken = tokens.first(where: { $0.kind == .entity }) else {
+        let entityTokens = tokens.filter { $0.kind == .entity }
+        guard !entityTokens.isEmpty else {
             return .invalid(reason: "No contact specified. Use @Name (e.g., @Sarah or @\"Sarah Connor\")")
         }
 
-        let contactName = entityToken.value
+        let contactNames = entityTokens.map(\.value)
+        let contactName = contactNames.first!
 
         // Check for archive/restore
         if let impulseToken = tokens.first(where: { $0.kind == .impulse }) {
             if impulseToken.value.lowercased() == "archive" {
-                return .archiveContact(contactName: contactName)
+                return .archiveContact(contactNames: contactNames)
             }
             if impulseToken.value.lowercased() == "restore" {
-                return .restoreContact(contactName: contactName)
+                return .restoreContact(contactNames: contactNames)
             }
         }
 
@@ -155,21 +152,17 @@ final class CommandParser {
             let value = constellationToken.value
             if value.hasPrefix("-") {
                 let name = String(value.dropFirst()).trimmingCharacters(in: .whitespaces)
-                if name.isEmpty {
-                    return .invalid(reason: "Constellation name required after *-")
-                }
-                return .removeFromConstellation(contactName: contactName, constellationName: name)
+                if name.isEmpty { return .invalid(reason: "Constellation name required after *-") }
+                return .removeFromConstellation(contactNames: contactNames, constellationName: name)
             } else {
-                if value.isEmpty {
-                    return .invalid(reason: "Constellation name required after *")
-                }
-                return .addToConstellation(contactName: contactName, constellationName: value)
+                if value.isEmpty { return .invalid(reason: "Constellation name required after *") }
+                return .addToConstellation(contactNames: contactNames, constellationName: value)
             }
         }
 
         // Check for artifact operations
         if tokens.contains(where: { $0.kind == .artifactKey }) {
-            return parseArtifactCommand(contactName: contactName, tokens: tokens)
+            return parseArtifactCommand(contactNames: contactNames, tokens: tokens)
         }
 
         // Check for interaction logging (has an impulse)
@@ -179,7 +172,7 @@ final class CommandParser {
             let timeMod = tokens.first(where: { $0.kind == .timeModifier })?.value
 
             return .logInteraction(
-                contactName: contactName,
+                contactNames: contactNames,
                 impulse: impulseToken.value,
                 tags: tags,
                 note: note,
@@ -443,7 +436,7 @@ final class CommandParser {
 
     // MARK: - Artifact Command Resolution
 
-    private func parseArtifactCommand(contactName: String, tokens: [Token]) -> ParsedCommand {
+    private func parseArtifactCommand(contactNames: [String], tokens: [Token]) -> ParsedCommand {
         guard let keyToken = tokens.first(where: { $0.kind == .artifactKey }) else {
             return .invalid(reason: "Artifact command requires a key")
         }
@@ -457,19 +450,15 @@ final class CommandParser {
 
         // Handle void deletion
         if valueToken?.kind == .void_ || value.lowercased() == "void" {
-            return .deleteArtifact(contactName: contactName, key: key)
+            return .deleteArtifact(contactNames: contactNames, key: key)
         }
 
         switch op {
-        case ":":
-            return .setArtifact(contactName: contactName, key: key, value: value)
-        case "+":
-            return .appendArtifact(contactName: contactName, key: key, value: value, forceConvert: false)
-        case "-":
-            return .removeArtifact(contactName: contactName, key: key, value: value)
-        default:
-            return .setArtifact(contactName: contactName, key: key, value: value)
-        }
+            case ":": return .setArtifact(contactNames: contactNames, key: key, value: value)
+            case "+": return .appendArtifact(contactNames: contactNames, key: key, value: value, forceConvert: false)
+            case "-": return .removeArtifact(contactNames: contactNames, key: key, value: value)
+            default:  return .setArtifact(contactNames: contactNames, key: key, value: value)
+            }
     }
 
     // MARK: - Time Modifier Resolution

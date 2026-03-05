@@ -161,6 +161,38 @@ struct InteractionGroup: Identifiable {
         result.sort { $0.date > $1.date }
         return result
     }
+    
+    /// Checks if all contacts in this group exactly match a constellation's active members
+    var mutualConstellationName: String? {
+        guard contacts.count > 1 else { return nil }
+        
+        // 1. Get the constellations of the first contact
+        let firstContactConstellations = contacts[0].constellations ?? []
+        guard !firstContactConstellations.isEmpty else { return nil }
+        
+        // 2. Intersect IDs to find constellations shared by EVERYONE in the group
+        var mutualIDs = Set(firstContactConstellations.map(\.id))
+        for contact in contacts.dropFirst() {
+            let contactConstellationIDs = Set((contact.constellations ?? []).map(\.id))
+            mutualIDs.formIntersection(contactConstellationIDs)
+        }
+        
+        // 3. Filter down to the actual shared constellation objects
+        let sharedConstellations = firstContactConstellations.filter { mutualIDs.contains($0.id) }
+        
+        // 4. Find the EXACT match: constellation's active members == group's members
+        let groupContactIDs = Set(contacts.map(\.id))
+        
+        let exactMatch = sharedConstellations.first { constellation in
+            // We filter out archived members because group interactions usually ignore them
+            let activeMembers = (constellation.contacts ?? []).filter { !$0.isArchived }
+            let memberIDs = Set(activeMembers.map(\.id))
+            
+            return memberIDs == groupContactIDs
+        }
+        
+        return exactMatch?.name
+    }
 }
 
 
@@ -245,9 +277,17 @@ struct InteractionRowContent: View {
                     }
                 } label: {
                     HStack(spacing: 3) {
-                        Text("\(contacts.count) contacts")
-                            .font(OrbitTypography.bodyMedium)
-                            .foregroundStyle(.primary)
+                        // NEW LOGIC: Show Constellation name if it exists, otherwise fallback to count
+                        if let constellationName = group.mutualConstellationName {
+                            Text("✦ \(constellationName)")
+                                .font(OrbitTypography.bodyMedium)
+                                .foregroundStyle(.purple)
+                        } else {
+                            Text("\(contacts.count) contacts")
+                                .font(OrbitTypography.bodyMedium)
+                                .foregroundStyle(.primary)
+                        }
+                        
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.tertiary)

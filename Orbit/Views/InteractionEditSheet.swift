@@ -21,7 +21,7 @@ struct InteractionEditSheet: View {
     @Query(sort: \Tag.name)
     private var allTags: [Tag]
 
-    private let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
+    private let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Play"]
 
     init(interaction: Interaction) {
         self.interaction = interaction
@@ -168,29 +168,63 @@ struct InteractionEditSheet: View {
     // MARK: - Actions
 
     private func save() {
-        interaction.impulse = impulse.trimmingCharacters(in: .whitespaces)
-        interaction.content = content.trimmingCharacters(in: .whitespaces)
+        // 1. Prepare formatted strings once to save processing time
+        let formattedImpulse = impulse.trimmingCharacters(in: .whitespaces)
+        let formattedContent = content.trimmingCharacters(in: .whitespaces)
+        let formattedTags = tagString.trimmingCharacters(in: .whitespaces)
+        
+        // 2. Update the primary interaction
+        interaction.impulse = formattedImpulse
+        interaction.content = formattedContent
         interaction.date = date
-        interaction.tagNames = tagString.trimmingCharacters(in: .whitespaces)
+        interaction.tagNames = formattedTags
 
-        // Refresh the contact's last contact date in case date changed
+        // Refresh the primary contact's metadata
         interaction.contact?.refreshLastContactDate()
         interaction.contact?.modifiedAt = Date()
 
         if let contact = interaction.contact {
             spotlightIndexer.index(contact: contact)
         }
+        
+        // 3. NEW: Batch Update Logic for Grouped Interactions
+        if let batchID = interaction.batchID {
+            let predicate = #Predicate<Interaction> { $0.batchID == batchID }
+            let descriptor = FetchDescriptor<Interaction>(predicate: predicate)
+            
+            if let siblings = try? modelContext.fetch(descriptor) {
+                for sibling in siblings {
+                    // Skip the primary one we just updated above
+                    if sibling.id == interaction.id { continue }
+                    
+                    // Apply exact same edits to the sibling
+                    sibling.impulse = formattedImpulse
+                    sibling.content = formattedContent
+                    sibling.date = date
+                    sibling.tagNames = formattedTags
+                    
+                    // Refresh the sibling contact's metadata and Spotlight index
+                    sibling.contact?.refreshLastContactDate()
+                    sibling.contact?.modifiedAt = Date()
+                    
+                    if let siblingContact = sibling.contact {
+                        spotlightIndexer.index(contact: siblingContact)
+                    }
+                }
+            }
+        }
 
-        // Ensure any new tag names are in the registry
+        // 4. Ensure any new tag names are in the registry
         for tagName in currentTagList {
             ensureTagExists(named: tagName)
         }
 
-        // FIX 1: Explicit save
+        // 5. Explicit save
         try? modelContext.save()
     }
 
     private func deleteInteraction() {
+        // 1. Delete the primary interaction
         interaction.isDeleted = true
         interaction.contact?.refreshLastContactDate()
         interaction.contact?.modifiedAt = Date()
@@ -198,9 +232,32 @@ struct InteractionEditSheet: View {
         if let contact = interaction.contact {
             spotlightIndexer.index(contact: contact)
         }
+        
+        // 2. NEW: Batch Delete Logic for Grouped Interactions
+        if let batchID = interaction.batchID {
+            let predicate = #Predicate<Interaction> { $0.batchID == batchID }
+            let descriptor = FetchDescriptor<Interaction>(predicate: predicate)
+            
+            if let siblings = try? modelContext.fetch(descriptor) {
+                for sibling in siblings {
+                    if sibling.id == interaction.id { continue }
+                    
+                    // Soft-delete the sibling
+                    sibling.isDeleted = true
+                    
+                    // Refresh the sibling contact's metadata and Spotlight index
+                    sibling.contact?.refreshLastContactDate()
+                    sibling.contact?.modifiedAt = Date()
+                    
+                    if let siblingContact = sibling.contact {
+                        spotlightIndexer.index(contact: siblingContact)
+                    }
+                }
+            }
+        }
 
-        // FIX 1: Explicit save
         try? modelContext.save()
+        dismiss()
     }
 
     private func ensureTagExists(named name: String) {

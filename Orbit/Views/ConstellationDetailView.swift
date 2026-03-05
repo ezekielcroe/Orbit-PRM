@@ -30,11 +30,12 @@ struct ConstellationDetailView: View {
     @Binding var selectedContact: Contact?
     
     // Facet State
-        enum DetailTab { case members, activity }
-        @State private var selectedTab: DetailTab = .members
-        
-        @State private var showAddInteraction = false
-        @State private var showAddMembers = false
+    enum DetailTab { case members, activity }
+    @State private var selectedTab: DetailTab = .members
+    
+    @State private var showAddInteraction = false
+    @State private var editingInteraction: Interaction?
+    @State private var showAddMembers = false
 
     // Member Selection State
     @State private var selectedMembers: Set<UUID> = []
@@ -65,8 +66,26 @@ struct ConstellationDetailView: View {
     }
 
     private var groupedMemberInteractions: [InteractionGroup] {
-        let allInteractions = activeMembers.flatMap { $0.activeInteractions }
-        return InteractionGroup.group(allInteractions)
+        // 1. Fetch and flatten all interactions
+        let allInteractions = activeMembers.flatMap { $0.interactions ?? [] }
+        
+        // 2. Filter out soft-deleted ones
+        let activeInteractions = allInteractions.filter { !$0.isDeleted }
+        
+        // 3. Group by batchID. (Using UUID() as a fallback perfectly ensures solo interactions stay in their own groups)
+        let grouped = Dictionary(grouping: activeInteractions) { interaction in
+            interaction.batchID ?? UUID()
+        }
+        
+        // 4. Map to groups using a STABLE identifier
+        return grouped.map { (key, interactions) in
+            // If the key is the batchID, use that. Otherwise, use the interaction's persistent ID.
+            InteractionGroup(
+                id: interactions.first?.batchID ?? UUID(),
+                interactions: interactions
+            )
+        }
+        .sorted { $0.date > $1.date }
     }
 
     private var sharedTagStats: [(name: String, count: Int)] {
@@ -186,11 +205,13 @@ struct ConstellationDetailView: View {
             Text("This will remove the selected contacts from ✦ \(constellation.name). Their data is not deleted.")
         }
         .onChange(of: selectedTab) { _, _ in
-            // Clear selection when switching tabs
             selectedMembers.removeAll()
         }
         .navigationDestination(item: $contactToView) { contact in
                     ContactDetailView(contact: contact)
+        }
+        .sheet(item: $editingInteraction) { interaction in
+            InteractionEditSheet(interaction: interaction)
         }
     }
 
@@ -446,48 +467,45 @@ struct ConstellationDetailView: View {
 
     private var activityFacet: some View {
         VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("TIMELINE")
-                                .font(OrbitTypography.captionMedium)
-                                .tracking(1.5)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, OrbitSpacing.lg)
+            HStack {
+                Text("TIMELINE")
+                    .font(OrbitTypography.captionMedium)
+                    .tracking(1.5)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, OrbitSpacing.lg)
 
-                        if groupedMemberInteractions.isEmpty {
-                            ContentUnavailableView {
-                                Label("No Activity", systemImage: "bubble.left.and.exclamationmark.bubble.right")
-                            } description: {
-                                Text("Log a group interaction to see it appear here and on every member's timeline.")
-                            } actions: {
-                                Button("Log Interaction") {
-                                    showAddInteraction = true
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                            .padding(.top, OrbitSpacing.md)
-                        } else {
-                            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                                ForEach(groupedMemberInteractions) { group in
-                                    InteractionRowContent(
-                                        group: group,
-                                        showContactNames: true,
-                                        showChevron: false
-                                    )
-                                    .padding(OrbitSpacing.sm)
-                                    .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                                    .padding(.horizontal, OrbitSpacing.lg)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        if let contact = group.contacts.first {
-                                            selectedContact = contact
-                                            contactToView = contact
-                                        }
-                                    }
-                                }
-                            }
+            if groupedMemberInteractions.isEmpty {
+                ContentUnavailableView {
+                    Label("No Activity", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                } description: {
+                    Text("Log a group interaction to see it appear here and on every member's timeline.")
+                } actions: {
+                    Button("Log Interaction") {
+                        showAddInteraction = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.top, OrbitSpacing.md)
+            } else {
+                VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+                    ForEach(groupedMemberInteractions) { group in
+                        InteractionRowContent(
+                            group: group,
+                            showContactNames: true,
+                            showChevron: false
+                        )
+                        .padding(OrbitSpacing.sm)
+                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.horizontal, OrbitSpacing.lg)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            editingInteraction = group.representative
                         }
                     }
+                }
+            }
+        }
         .padding(.top, OrbitSpacing.md)
         .padding(.bottom, OrbitSpacing.xxxl)
     }

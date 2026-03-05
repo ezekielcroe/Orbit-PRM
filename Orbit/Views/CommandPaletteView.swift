@@ -394,7 +394,7 @@ struct CommandPaletteView: View {
         case .impulse:
             // Suggest common impulse types — substring match
             let query = lastToken.value.lowercased()
-            let commonImpulses = ["Call", "Coffee", "Dinner", "Text", "Meeting", "Lunch", "Walk", "Video Call", "Email"]
+            let commonImpulses = ["Call", "Coffee", "Meal", "Message", "Meeting", "Play"]
 
             let matches: [String]
             if query.isEmpty {
