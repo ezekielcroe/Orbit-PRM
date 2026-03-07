@@ -75,8 +75,11 @@ final class CommandExecutor {
             )
             
         case .searchContact:
-            // Search is handled by the UI layer, not the executor
-            result = CommandResult(success: true, message: "Navigating to search", affectedContact: nil)
+        // Search is handled by the UI layer, not the executor
+        result = CommandResult(success: true, message: "Navigating to search", affectedContact: nil)
+            
+        case .searchConstellation:
+            result = CommandResult(success: true, message: "Navigating to constellation", affectedContact: nil)
             
         case .undo:
             result = executeUndo(in: context)

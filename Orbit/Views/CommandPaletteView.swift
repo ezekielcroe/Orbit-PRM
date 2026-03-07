@@ -21,6 +21,7 @@ struct CommandPaletteView: View {
 
     @Binding var isPresented: Bool
     var onNavigateToContact: ((Contact) -> Void)?
+    var onNavigateToConstellation: ((Constellation) -> Void)?
 
     @State private var inputText = ""
     @State private var tokens: [Token] = []
@@ -577,13 +578,32 @@ struct CommandPaletteView: View {
     private func executeCommand(commandToExecute: ParsedCommand? = nil) {
         let command = commandToExecute ?? parser.parse(inputText)
 
-        // The executor is for data mutations; navigation is a UI concern.
+        // 1. Handle Contact Navigation
         if case .searchContact(let name, _) = command {
-            if let contact = executor.findContact(named: name, in: modelContext) {
+            let query = name.lowercased()
+            // Bypass strict executor ambiguity. Grab the exact match, prefix match, or substring match.
+            if let contact = contacts.first(where: { $0.searchableName == query }) ??
+                             contacts.first(where: { $0.searchableName.hasPrefix(query) }) ??
+                             contacts.first(where: { $0.searchableName.contains(query) }) {
                 onNavigateToContact?(contact)
                 isPresented = false
             } else {
                 resultMessage = "Contact '\(name)' not found."
+                resultIsError = true
+            }
+            return
+        }
+        
+        // 2. NEW: Handle Constellation Navigation
+        if case .searchConstellation(let name) = command {
+            let query = name.lowercased()
+            if let constellation = constellations.first(where: { $0.searchableName == query }) ??
+                                   constellations.first(where: { $0.searchableName.hasPrefix(query) }) ??
+                                   constellations.first(where: { $0.searchableName.contains(query) }) {
+                onNavigateToConstellation?(constellation)
+                isPresented = false
+            } else {
+                resultMessage = "Constellation '\(name)' not found."
                 resultIsError = true
             }
             return

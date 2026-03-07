@@ -58,6 +58,7 @@ struct OrbitExporter {
         guard let contacts = try? context.fetch(descriptor) else { return nil }
 
         var exportData: [[String: Any]] = []
+        let isoFormatter = ISO8601DateFormatter()
 
         for contact in contacts {
             var entry: [String: Any] = [
@@ -66,17 +67,28 @@ struct OrbitExporter {
                 "targetOrbit": contact.targetOrbit,
                 "targetOrbitName": contact.orbitZoneName,
                 "isArchived": contact.isArchived,
-                "gravityScore": contact.gravityScore,
-                "createdAt": ISO8601DateFormatter().string(from: contact.createdAt),
-                "modifiedAt": ISO8601DateFormatter().string(from: contact.modifiedAt),
+                "createdAt": isoFormatter.string(from: contact.createdAt),
+                "modifiedAt": isoFormatter.string(from: contact.modifiedAt),
             ]
 
-            if let lastContact = contact.lastContactDate {
-                entry["lastContactDate"] = ISO8601DateFormatter().string(from: lastContact)
-                entry["daysSinceLastContact"] = contact.daysSinceLastContact
+            // FIX: Ensure Gravity Score is a valid, finite number.
+            // JSON Serialization will crash if it encounters Infinity or NaN.
+            let score = contact.gravityScore
+            if score.isFinite {
+                entry["gravityScore"] = score
+            } else {
+                entry["gravityScore"] = 999.0 // Fallback ceiling value for Infinity
             }
 
-            // Artifacts as structured key-value pairs
+            // Last Contact & Days Since
+            if let lastContact = contact.lastContactDate {
+                entry["lastContactDate"] = isoFormatter.string(from: lastContact)
+                if let days = contact.daysSinceLastContact {
+                    entry["daysSinceLastContact"] = days
+                }
+            }
+
+            // Artifacts
             var artifacts: [[String: Any]] = []
             for artifact in contact.artifacts ?? [] {
                 var artifactEntry: [String: Any] = [
@@ -92,19 +104,18 @@ struct OrbitExporter {
             }
             entry["artifacts"] = artifacts
 
-            // Tags (aggregated from interactions)
+            // Tags & Constellations
             entry["tags"] = contact.tagNames
-
-            // Constellations
             entry["constellations"] = contact.constellations?.map(\.name) ?? []
 
-            // Interactions (only non-deleted)
-            let interactions = contact.interactions?
+            // Interactions
+            let safeInteractions = contact.interactions ?? []
+            let interactionsList = safeInteractions
                 .filter { !$0.isDeleted }
                 .sorted { $0.date > $1.date }
                 .map { interaction -> [String: Any] in
                     var interactionEntry: [String: Any] = [
-                        "date": ISO8601DateFormatter().string(from: interaction.date),
+                        "date": isoFormatter.string(from: interaction.date),
                         "impulse": interaction.impulse,
                     ]
                     if !interaction.content.isEmpty {
@@ -115,8 +126,9 @@ struct OrbitExporter {
                     }
                     return interactionEntry
                 }
-            entry["interactions"] = interactions
-            entry["interactionCount"] = interactions?.count
+            
+            entry["interactions"] = interactionsList
+            entry["interactionCount"] = interactionsList.count
 
             exportData.append(entry)
         }
@@ -124,12 +136,21 @@ struct OrbitExporter {
         // Wrap in a root object with metadata
         let exportRoot: [String: Any] = [
             "exportVersion": "2.0",
-            "exportDate": ISO8601DateFormatter().string(from: Date()),
+            "exportDate": isoFormatter.string(from: Date()),
             "contactCount": exportData.count,
             "contacts": exportData,
         ]
 
-        return try? JSONSerialization.data(withJSONObject: exportRoot, options: [.prettyPrinted, .sortedKeys])
+        // Safely serialize and catch any structural errors
+        do {
+            if !JSONSerialization.isValidJSONObject(exportRoot) {
+                print("⚠️ Orbit JSON Warning: The data structure contains an invalid JSON type.")
+            }
+            return try JSONSerialization.data(withJSONObject: exportRoot, options: [.prettyPrinted, .sortedKeys])
+        } catch {
+            print("❌ JSON Serialization failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Export contacts as CSV with more columns than Phase 1

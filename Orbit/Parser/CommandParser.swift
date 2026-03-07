@@ -124,7 +124,7 @@ final class CommandParser {
                 )
             }
 
-            return .invalid(reason: "Constellation command needs an action: *\(constellationName) !Action")
+            return .searchConstellation(name: constellationName)
         }
 
         // Must have an entity (@contact)

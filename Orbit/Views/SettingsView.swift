@@ -1,11 +1,3 @@
-//
-//  SettingsView.swift
-//  Orbit
-//
-//  Created by Zhi Zheng Yeo on 28/2/26.
-//
-
-
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
@@ -31,8 +23,8 @@ struct SettingsView: View {
     @State private var isExporting = false
 
     // File Exporter State
-    @State private var showJSONExporter = false
-    @State private var showCSVExporter = false
+    @State private var showExporter = false
+    @State private var exportContentType: UTType = .json
     @State private var exportDocument: ExportDocument?
     @State private var exportFilename: String = ""
     
@@ -46,6 +38,13 @@ struct SettingsView: View {
     @State private var contactsAccessStatus: String = "Not checked"
     @State private var showOpenSettingsAlert = false
 
+    // JSON Backup Import State
+    @State private var showJSONImporter = false
+    @State private var showJSONImportConfirmation = false
+    @State private var pendingJSONImportURL: URL?
+    @State private var jsonImportPreviewMessage = ""
+    @State private var isImportingJSON = false
+
     // Tag Management State
     @State private var showAddTag = false
     @State private var newTagName = ""
@@ -53,6 +52,13 @@ struct SettingsView: View {
     // Theme
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
     @AppStorage("appTint") private var appTint: AppTint = .blue
+
+    // Tutorial & Sample Data
+    @State private var showTutorial = false
+    @State private var showSampleDataConfirmation = false
+    @State private var showClearSampleDataConfirmation = false
+    @AppStorage("hasSampleData") private var hasSampleData = false
+    @AppStorage("hasSeenTutorial") private var hasSeenTutorial = false
 
     // Maintenance
     @State private var showIntegrityResults = false
@@ -72,12 +78,14 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                gettingStartedSection
                 statsSection
                 tagSection
                 exportSection
                 importSection
                 appearanceSection
                 maintenanceSection
+                dangerZoneSection
                 aboutSection
             }
             .formStyle(.grouped)
@@ -92,7 +100,7 @@ struct SettingsView: View {
         .onAppear {
             fetchStats()
         }
-        .alert("Data Erased", isPresented: $showImportResults) {
+        .alert("Done", isPresented: $showImportResults) {
             Button("OK") {}
         } message: {
             Text(importResultMessage)
@@ -102,6 +110,7 @@ struct SettingsView: View {
         } message: {
             Text(integrityResultMessage)
         }
+        // Erase all data confirmation
         .confirmationDialog("Erase All Data?", isPresented: $showDeleteConfirmation) {
             Button("Erase Everything", role: .destructive) {
                 deleteAllData()
@@ -109,27 +118,61 @@ struct SettingsView: View {
         } message: {
             Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This cannot be undone.")
         }
+        // Sample data confirmation
+        .confirmationDialog("Load Sample Data?", isPresented: $showSampleDataConfirmation) {
+            Button("Load Sample Data") {
+                loadSampleData()
+            }
+        } message: {
+            Text("This will add 8 sample contacts with interactions, artifacts, and constellations so you can explore every feature. You can clear it later from Settings.")
+        }
+        // Clear sample data confirmation
+        .confirmationDialog("Clear Sample Data?", isPresented: $showClearSampleDataConfirmation) {
+            Button("Erase All Data", role: .destructive) {
+                deleteAllData()
+                hasSampleData = false
+            }
+        } message: {
+            Text("This will erase all data (including any contacts you've added). You can reload sample data afterwards if needed.")
+        }
+        // JSON backup import confirmation
+        .confirmationDialog("Import JSON Backup?", isPresented: $showJSONImportConfirmation) {
+            Button("Merge Into Existing Data") {
+                if let url = pendingJSONImportURL {
+                    performJSONImport(from: url, clearFirst: false)
+                }
+            }
+            Button("Replace All Data", role: .destructive) {
+                if let url = pendingJSONImportURL {
+                    performJSONImport(from: url, clearFirst: true)
+                }
+            }
+        } message: {
+            Text(jsonImportPreviewMessage)
+        }
         .fileExporter(
-            isPresented: $showJSONExporter,
+            isPresented: $showExporter, // Using the new unified boolean
             document: exportDocument,
-            contentType: .json,
+            contentType: exportContentType, // Dynamically swaps between .json and .commaSeparatedText
             defaultFilename: exportFilename
         ) { result in
             handleExportResult(result)
         }
-        .fileExporter(
-            isPresented: $showCSVExporter,
-            document: exportDocument,
-            contentType: .commaSeparatedText,
-            defaultFilename: exportFilename
+        .fileImporter(
+            isPresented: $showJSONImporter,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
         ) { result in
-            handleExportResult(result)
+            handleJSONImportSelection(result)
         }
         .sheet(isPresented: $showImportPreview) {
             ImportPreviewSheet(
                 importableContacts: $importableContacts,
                 onImport: importSelectedContacts
             )
+        }
+        .sheet(isPresented: $showTutorial) {
+            TutorialView()
         }
     }
 
@@ -158,6 +201,67 @@ struct SettingsView: View {
 
         let constellationDescriptor = FetchDescriptor<Constellation>()
         stats.constellationCount = (try? modelContext.fetchCount(constellationDescriptor)) ?? 0
+    }
+
+    // MARK: - Getting Started Section
+
+    private var gettingStartedSection: some View {
+        Section {
+            Button {
+                showTutorial = true
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("How to Use Orbit")
+                        Text("Learn the command palette syntax and features")
+                            .font(OrbitTypography.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "book")
+                }
+            }
+
+            if !hasSampleData && stats.contactCount == 0 {
+                Button {
+                    showSampleDataConfirmation = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Load Sample Data")
+                            Text("Explore with 8 contacts, interactions, and groups")
+                                .font(OrbitTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "sparkles")
+                    }
+                }
+            }
+
+            if hasSampleData {
+                Button(role: .destructive) {
+                    showClearSampleDataConfirmation = true
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear Sample Data")
+                            Text("Remove all sample contacts to start fresh")
+                                .font(OrbitTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "xmark.bin")
+                    }
+                }
+            }
+        } header: {
+            Text("Getting Started")
+        } footer: {
+            if !hasSeenTutorial {
+                Text("New to Orbit? Start with the tutorial to learn how the command palette works.")
+            }
+        }
     }
 
     // MARK: - Stats Section
@@ -218,20 +322,20 @@ struct SettingsView: View {
             Button {
                 exportJSON()
             } label: {
-                Label("Export JSON", systemImage: "doc.text")
+                Label("Export JSON Backup", systemImage: "arrow.up.doc")
             }
-            .disabled(isExporting)
+            .disabled(isExporting || stats.contactCount == 0)
 
             Button {
                 exportCSV()
             } label: {
-                Label("Export CSV", systemImage: "tablecells")
+                Label("Export CSV Summary", systemImage: "tablecells")
             }
-            .disabled(isExporting)
+            .disabled(isExporting || stats.contactCount == 0)
         } header: {
-            Text("Data Export")
+            Text("Backup & Export")
         } footer: {
-            Text("JSON includes all data. CSV provides a flat summary of contacts.")
+            Text("JSON backup includes all data and can be imported back. CSV provides a flat summary of contacts for spreadsheets.")
         }
     }
 
@@ -239,6 +343,28 @@ struct SettingsView: View {
 
     private var importSection: some View {
         Section {
+            Button {
+                showJSONImporter = true
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Import JSON Backup")
+                        if isImportingJSON {
+                            Text("Importing...")
+                                .font(OrbitTypography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: {
+                    if isImportingJSON {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.down.doc")
+                    }
+                }
+            }
+            .disabled(isImportingJSON)
+
             Button {
                 checkContactsAccess()
             } label: {
@@ -255,7 +381,7 @@ struct SettingsView: View {
         } header: {
             Text("Import")
         } footer: {
-            Text("Imports names and basic info. Duplicates are skipped automatically.")
+            Text("JSON import restores a previous backup. Apple Contacts import brings in names and basic info — duplicates are skipped.")
         }
         .alert("Contacts Access Required", isPresented: $showOpenSettingsAlert) {
             Button("Open Settings") {
@@ -319,18 +445,31 @@ struct SettingsView: View {
             } label: {
                 Label("Purge Deleted Logs", systemImage: "trash.slash")
             }
+            .disabled(stats.deletedInteractionCount == 0)
+        } header: {
+            Text("Maintenance")
+        } footer: {
+            Text("Database Doctor repairs orphaned records and stale caches. Spotlight Rebuild fixes system search. Purge permanently removes soft-deleted interactions.")
+        }
+    }
 
+    // MARK: - Danger Zone Section
+
+    private var dangerZoneSection: some View {
+        Section {
             Button(role: .destructive) {
                 showDeleteConfirmation = true
             } label: {
                 Label("Erase All Data", systemImage: "exclamationmark.triangle")
             }
         } header: {
-            Text("Advanced Maintenance")
+            Text("Danger Zone")
         } footer: {
-            Text("Database Doctor safely repairs orphaned records and stale cache data. Use Spotlight Rebuild if contacts aren't appearing in Apple system search.")
+            Text("Permanently deletes everything. Consider exporting a JSON backup first.")
         }
     }
+
+    // MARK: - About Section
 
     private var aboutSection: some View {
         Section {
@@ -342,6 +481,17 @@ struct SettingsView: View {
         } header: {
             Text("About")
         }
+    }
+
+    // MARK: - Logic: Sample Data
+
+    private func loadSampleData() {
+        let result = SampleDataGenerator.generate(in: modelContext)
+        hasSampleData = true
+        hasSeenTutorial = true
+        importResultMessage = "Loaded \(result.summary)"
+        showImportResults = true
+        fetchStats()
     }
 
     // MARK: - Logic: Tag Rename
@@ -557,96 +707,292 @@ struct SettingsView: View {
         fetchStats()
     }
 
-    // MARK: - Logic: Data Export
+    // MARK: - Logic: JSON Backup Import
 
-    private func exportJSON() {
-        isExporting = true
-        // Fetch full data only at export time
-        DispatchQueue.global(qos: .userInitiated).async {
-            let exportData = self.allContacts.map { contact -> [String: Any] in
-                var dict: [String: Any] = [
-                    "id": contact.id.uuidString,
-                    "name": contact.name,
-                    "targetOrbit": contact.targetOrbit,
-                    "isArchived": contact.isArchived,
-                    "notes": contact.notes,
-                    "createdAt": contact.createdAt.timeIntervalSince1970,
-                    "modifiedAt": contact.modifiedAt.timeIntervalSince1970
-                ]
-                
-                if let lastContact = contact.lastContactDate {
-                    dict["lastContactDate"] = lastContact.timeIntervalSince1970
-                }
-                
-                dict["artifacts"] = (contact.artifacts ?? []).map { artifact -> [String: Any] in
-                    return [
-                        "key": artifact.key,
-                        "value": artifact.value,
-                        "category": artifact.category ?? ""
-                    ]
-                }
-                
-                dict["interactions"] = (contact.interactions ?? []).map { interaction -> [String: Any] in
-                    return [
-                        "date": interaction.date.timeIntervalSince1970,
-                        "impulse": interaction.impulse,
-                        "content": interaction.content,
-                        "tagNames": interaction.tagNames,
-                        "isDeleted": interaction.isDeleted
-                    ]
-                }
-                
-                dict["constellations"] = (contact.constellations ?? []).map { $0.name }
-                
-                return dict
+    private func handleJSONImportSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+
+            // Read and preview the file
+            guard url.startAccessingSecurityScopedResource() else {
+                importResultMessage = "Couldn't access the selected file."
+                showImportResults = true
+                return
             }
-            
+
+            defer { url.stopAccessingSecurityScopedResource() }
+
             do {
-                let jsonData = try JSONSerialization.data(withJSONObject: exportData, options: [.prettyPrinted, .sortedKeys])
-                DispatchQueue.main.async {
-                    self.exportDocument = ExportDocument(data: jsonData)
-                    self.exportFilename = "Orbit_Export_\(self.formattedDate()).json"
-                    self.isExporting = false
-                    self.showJSONExporter = true
+                let data = try Data(contentsOf: url)
+                guard let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    importResultMessage = "Invalid backup file. Expected a JSON array of contacts."
+                    showImportResults = true
+                    return
                 }
+
+                let contactCount = jsonArray.count
+                let interactionCount = jsonArray.reduce(0) { sum, dict in
+                    sum + ((dict["interactions"] as? [[String: Any]])?.count ?? 0)
+                }
+                let artifactCount = jsonArray.reduce(0) { sum, dict in
+                    sum + ((dict["artifacts"] as? [[String: Any]])?.count ?? 0)
+                }
+
+                jsonImportPreviewMessage = "This backup contains \(contactCount) contacts, \(interactionCount) interactions, and \(artifactCount) artifacts.\n\nYou can merge into your existing data or replace everything."
+
+                // Save the URL for the actual import (need to re-read because security scope)
+                // Store the data instead since the URL scope will expire
+                pendingImportData = data
+                showJSONImportConfirmation = true
+
+            } catch {
+                importResultMessage = "Failed to read backup: \(error.localizedDescription)"
+                showImportResults = true
+            }
+
+        case .failure(let error):
+            if (error as NSError).domain == NSCocoaErrorDomain && (error as NSError).code == NSUserCancelledError {
+                return
+            }
+            importResultMessage = "Failed to select file: \(error.localizedDescription)"
+            showImportResults = true
+        }
+    }
+
+    // Temporary storage for the imported JSON data between preview and execution
+    @State private var pendingImportData: Data?
+
+    private func performJSONImport(from url: URL, clearFirst: Bool) {
+        isImportingJSON = true
+
+        guard let data = pendingImportData else {
+            importResultMessage = "Import data was lost. Please try again."
+            showImportResults = true
+            isImportingJSON = false
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                guard let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    DispatchQueue.main.async {
+                        self.importResultMessage = "Invalid JSON format."
+                        self.showImportResults = true
+                        self.isImportingJSON = false
+                    }
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    if clearFirst {
+                        self.deleteAllDataSilently()
+                    }
+
+                    var importedContacts = 0
+                    var importedInteractions = 0
+                    var importedArtifacts = 0
+                    var constellationMap: [String: Constellation] = [:]
+
+                    // Pre-fetch existing constellation names
+                    let constellationDescriptor = FetchDescriptor<Constellation>()
+                    if let existing = try? self.modelContext.fetch(constellationDescriptor) {
+                        for c in existing {
+                            constellationMap[c.name.lowercased()] = c
+                        }
+                    }
+
+                    // Pre-fetch existing contact names (for merge dedup)
+                    let existingNames: Set<String>
+                    if !clearFirst {
+                        existingNames = Set(self.allContacts.map { $0.searchableName })
+                    } else {
+                        existingNames = []
+                    }
+
+                    for contactDict in jsonArray {
+                        guard let name = contactDict["name"] as? String, !name.isEmpty else { continue }
+
+                        // Skip duplicates when merging
+                        if !clearFirst && existingNames.contains(name.lowercased()) {
+                            continue
+                        }
+
+                        let targetOrbit = contactDict["targetOrbit"] as? Int ?? 2
+                        let notes = contactDict["notes"] as? String ?? ""
+                        let isArchived = contactDict["isArchived"] as? Bool ?? false
+
+                        let contact = Contact(name: name, notes: notes, targetOrbit: targetOrbit)
+                        contact.isArchived = isArchived
+
+                        // Restore dates if available
+                        if let createdTs = contactDict["createdAt"] as? TimeInterval {
+                            contact.createdAt = Date(timeIntervalSince1970: createdTs)
+                        }
+                        if let modifiedTs = contactDict["modifiedAt"] as? TimeInterval {
+                            contact.modifiedAt = Date(timeIntervalSince1970: modifiedTs)
+                        }
+                        if let lastContactTs = contactDict["lastContactDate"] as? TimeInterval {
+                            contact.lastContactDate = Date(timeIntervalSince1970: lastContactTs)
+                        }
+
+                        self.modelContext.insert(contact)
+
+                        // Import interactions
+                        if let interactions = contactDict["interactions"] as? [[String: Any]] {
+                            for interDict in interactions {
+                                let impulse = interDict["impulse"] as? String ?? ""
+                                let content = interDict["content"] as? String ?? ""
+                                let isDeleted = interDict["isDeleted"] as? Bool ?? false
+                                let date: Date
+                                if let ts = interDict["date"] as? TimeInterval {
+                                    date = Date(timeIntervalSince1970: ts)
+                                } else {
+                                    date = Date()
+                                }
+
+                                let interaction = Interaction(impulse: impulse, content: content, date: date)
+                                interaction.isDeleted = isDeleted
+                                interaction.tagNames = interDict["tagNames"] as? String ?? ""
+                                interaction.contact = contact
+                                self.modelContext.insert(interaction)
+                                importedInteractions += 1
+                            }
+                        }
+
+                        // Import artifacts
+                        if let artifacts = contactDict["artifacts"] as? [[String: Any]] {
+                            for artDict in artifacts {
+                                let key = artDict["key"] as? String ?? ""
+                                let value = artDict["value"] as? String ?? ""
+                                let category = artDict["category"] as? String
+
+                                guard !key.isEmpty else { continue }
+
+                                let artifact = Artifact(key: key, value: value, category: category?.isEmpty == true ? nil : category)
+                                artifact.contact = contact
+                                self.modelContext.insert(artifact)
+                                importedArtifacts += 1
+                            }
+                        }
+
+                        // Restore constellation memberships
+                        if let constellationNames = contactDict["constellations"] as? [String] {
+                            for cName in constellationNames {
+                                guard !cName.isEmpty else { continue }
+                                let key = cName.lowercased()
+
+                                let constellation: Constellation
+                                if let existing = constellationMap[key] {
+                                    constellation = existing
+                                } else {
+                                    constellation = Constellation(name: cName)
+                                    self.modelContext.insert(constellation)
+                                    constellationMap[key] = constellation
+                                }
+
+                                var members = constellation.contacts ?? []
+                                members.append(contact)
+                                constellation.contacts = members
+                            }
+                        }
+
+                        // Refresh cached fields
+                        contact.refreshCachedFields()
+                        importedContacts += 1
+                    }
+
+                    // Register tags from imported interactions
+                    self.registerTagsFromInteractions()
+
+                    PersistenceHelper.saveWithLogging(self.modelContext, operation: "import JSON backup")
+                    self.spotlightIndexer.reindexAll(from: self.modelContext)
+
+                    self.isImportingJSON = false
+                    self.pendingImportData = nil
+                    self.importResultMessage = "Imported \(importedContacts) contacts, \(importedInteractions) interactions, and \(importedArtifacts) artifacts."
+                    self.showImportResults = true
+                    self.fetchStats()
+                }
+
             } catch {
                 DispatchQueue.main.async {
-                    self.importResultMessage = "Failed to generate JSON: \(error.localizedDescription)"
+                    self.importResultMessage = "Failed to parse backup: \(error.localizedDescription)"
                     self.showImportResults = true
-                    self.isExporting = false
+                    self.isImportingJSON = false
                 }
             }
         }
     }
 
-    private func exportCSV() {
-        isExporting = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            var csv = "Name,Orbit Zone,Target Orbit,Last Contact,Days Since Contact,Interaction Count,Tags,Constellations,Archived,Notes\n"
-            
-            for contact in self.allContacts {
-                let name = Self.csvEscape(contact.name)
-                let orbit = contact.orbitZoneName
-                let targetOrbit = String(contact.targetOrbit)
-                let lastContact = contact.lastContactDate?.formatted(date: .abbreviated, time: .omitted) ?? "Never"
-                let daysSince = contact.daysSinceLastContact.map(String.init) ?? "N/A"
-                let interactionCount = String(contact.cachedInteractionCount)
-                let tags = Self.csvEscape(contact.cachedTagSummary.replacingOccurrences(of: ",", with: "; "))
-                let constellations = Self.csvEscape((contact.constellations ?? []).map(\.name).joined(separator: "; "))
-                let archived = contact.isArchived ? "Yes" : "No"
-                let notes = Self.csvEscape(contact.notes)
-                
-                csv += "\(name),\(orbit),\(targetOrbit),\(lastContact),\(daysSince),\(interactionCount),\(tags),\(constellations),\(archived),\(notes)\n"
-            }
-            
-            if let data = csv.data(using: .utf8) {
-                DispatchQueue.main.async {
-                    self.exportDocument = ExportDocument(data: data)
-                    self.exportFilename = "Orbit_Export_\(self.formattedDate()).csv"
-                    self.isExporting = false
-                    self.showCSVExporter = true
+    /// Erase all data without showing alerts (used as a step before replace-import)
+    private func deleteAllDataSilently() {
+        try? modelContext.delete(model: Interaction.self)
+        try? modelContext.delete(model: Artifact.self)
+        try? modelContext.delete(model: Contact.self)
+        try? modelContext.delete(model: Tag.self)
+        try? modelContext.delete(model: Constellation.self)
+        PersistenceHelper.saveWithLogging(modelContext, operation: "clear before import")
+        spotlightIndexer.deleteAll()
+    }
+
+    /// Scan all interactions and register any tag names that aren't in the registry yet.
+    private func registerTagsFromInteractions() {
+        let existingTagNames: Set<String>
+        let tagDescriptor = FetchDescriptor<Tag>()
+        if let tags = try? modelContext.fetch(tagDescriptor) {
+            existingTagNames = Set(tags.map { $0.searchableName })
+        } else {
+            existingTagNames = []
+        }
+
+        let interactionDescriptor = FetchDescriptor<Interaction>()
+        guard let interactions = try? modelContext.fetch(interactionDescriptor) else { return }
+
+        var newTags: Set<String> = []
+        for interaction in interactions {
+            for tagName in interaction.tagList {
+                let key = tagName.lowercased().trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty && !existingTagNames.contains(key) && !newTags.contains(key) {
+                    newTags.insert(key)
+                    let tag = Tag(name: tagName.trimmingCharacters(in: .whitespaces))
+                    modelContext.insert(tag)
                 }
             }
+        }
+    }
+
+    // MARK: - Logic: Data Export
+    private func exportJSON() {
+        isExporting = true
+        
+        if let jsonData = OrbitExporter.exportJSON(from: modelContext) {
+            self.exportDocument = ExportDocument(data: jsonData)
+            self.exportFilename = "Orbit_Backup_\(self.formattedDate()).json"
+            self.exportContentType = .json // Set to JSON
+            self.isExporting = false
+            self.showExporter = true // Trigger unified exporter
+        } else {
+            self.importResultMessage = "Failed to generate JSON backup."
+            self.showImportResults = true
+            self.isExporting = false
+        }
+    }
+
+    private func exportCSV() {
+        isExporting = true
+        
+        let csvString = OrbitExporter.exportCSV(from: modelContext)
+        if let csvData = csvString.data(using: .utf8) {
+            self.exportDocument = ExportDocument(data: csvData)
+            self.exportFilename = "Orbit_Export_\(self.formattedDate()).csv"
+            self.exportContentType = .commaSeparatedText // Set to CSV
+            self.isExporting = false
+            self.showExporter = true // Trigger unified exporter
+        } else {
+            self.importResultMessage = "Failed to generate CSV export."
+            self.showImportResults = true
+            self.isExporting = false
         }
     }
 

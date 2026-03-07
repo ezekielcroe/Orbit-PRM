@@ -30,15 +30,51 @@ struct ContentView: View {
     #endif
 
     var body: some View {
-        #if os(macOS)
-        threeColumnMacLayout
-        #else
-        if horizontalSizeClass == .compact {
-            mobileTabLayout
-        } else {
+        Group {
+            #if os(macOS)
             threeColumnMacLayout
+            #else
+            if horizontalSizeClass == .compact {
+                mobileTabLayout
+            } else {
+                threeColumnMacLayout
+            }
+            #endif
         }
-        #endif
+        // 1. Present the Command Palette directly here
+        .sheet(isPresented: $showCommandPalette) {
+            CommandPaletteView(
+                isPresented: $showCommandPalette,
+                onNavigateToContact: { contact in
+                    // Direct navigation control!
+                    selectedTab = .people
+                    selectedContact = contact
+                },
+                onNavigateToConstellation: { constellation in
+                    selectedTab = .constellations
+                    selectedConstellation = constellation
+                }
+            )
+            .presentationDetents([.medium, .large])
+            #if os(iOS)
+            .presentationDragIndicator(.visible)
+            #endif
+        }
+        // 2. Listen for the keyboard shortcut
+        .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in
+            showCommandPalette = true
+        }
+        // 3. FIX: Handle Apple Spotlight deep links
+        .onChange(of: spotlightContactID) { _, newID in
+            if let id = newID {
+                let descriptor = FetchDescriptor<Contact>(predicate: #Predicate { $0.id == id })
+                if let match = try? modelContext.fetch(descriptor).first {
+                    selectedTab = .people
+                    selectedContact = match
+                }
+                spotlightContactID = nil // Reset after consuming
+            }
+        }
     }
 
     // MARK: - macOS & iPadOS Layout (3-Column)
@@ -128,7 +164,6 @@ struct ContentView: View {
                 }
             }
         }
-        .attachCommonLogic(showCommandPalette: $showCommandPalette, spotlightContactID: $spotlightContactID)
     }
 
     // MARK: - iOS Layout (Tab Bar)
@@ -176,7 +211,6 @@ struct ContentView: View {
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(NavTab.settings)
         }
-        .attachCommonLogic(showCommandPalette: $showCommandPalette, spotlightContactID: $spotlightContactID)
     }
 }
 

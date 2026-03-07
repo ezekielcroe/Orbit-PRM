@@ -75,6 +75,9 @@ enum ParsedCommand {
 
     /// Search within a contact's artifacts: @Name searchquery
     case searchContact(name: String, query: String)
+    
+    /// Search/Navigate to a constellation: *GroupName
+    case searchConstellation(name: String)
 
     /// Undo the last action
     case undo
