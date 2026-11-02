@@ -10,7 +10,7 @@ Orbit is designed around "Orbit Zones" to manage your interaction cadence and fe
 
 1. [The Concept](#the-concept)
 2. [Core Features](#core-features)
-3. [Command Palette Syntax](#command-palette-syntax)
+3. [Shortcut Syntax](#shortcut-syntax)
 4. [Privacy & Data Ownership](#privacy--data-ownership)
 5. [Design System](#design-system)
 6. [Under the Hood](#under-the-hood)
@@ -35,43 +35,44 @@ Orbit models your relationships as a solar system. The people closest to you liv
 
 ## Core Features
 
-* **⚡️ Command Palette (`⌘K`):** A single-line input that uses a custom tokenizer to parse structured commands. Type `@Sarah !Coffee #catch-up "talked about the trip" ^yesterday` and a full interaction is logged in one keystroke. Features real-time syntax highlighting and autocomplete.
-* **🚨 Drift Detection:** When time-since-last-contact exceeds a contact's expected orbit threshold, they are flagged as **drifting**. Severity coloring (yellow → orange → red) and priority sorting show you exactly who to reach out to first.
-* **✨ Constellations:** Group contacts into named collections (e.g., `*Family`, `*Work Team`). Log an interaction for an entire constellation at once via the command palette (`*Family !Dinner`).
-* **🧩 Custom Artifacts:** Add flexible, custom data to contacts without rigid forms. Supports singleton values (`> birthday: March 12`) and array values (`> likes + Jazz`). Category auto-detection intelligently groups artifacts.
-* **🔍 System Integration:** Contacts are indexed via CoreSpotlight, making them searchable system-wide. Easily import names and metadata from your Apple Contacts with built-in deduplication.
-* **🗄 Bulk Management:** Multi-select contacts to change orbit zones, archive, restore, or manage constellation memberships in bulk.
+* **☀️ Today:** Up to five people to reach out to each day, chosen once so the list doesn't reshuffle while you work through it. Each row says why in plain words ("You used to talk every 2 weeks — it's been 6") and has visible Log, Snooze and Closeness actions. Birthdays and anniversaries from your facts show up under *Coming up*.
+* **✍️ Log in plain words (`⌘K`):** Type `Coffee with Sarah yesterday, talked about her move` and Orbit shows who, what, when and the note before saving. Ambiguous names get a picker, unknown names can be created on the spot, and the palette stays open so you can log several things in a row.
+* **↩️ Undo everywhere:** Every change shows a banner with Undo — logs, edits, facts, group membership, closeness, archive and snooze.
+* **🎯 Closeness:** Each person's orbit zone sets how often you'd like to be in touch. Imported people stay quiet until you set their closeness, so day one isn't a wall of 200 "overdue" contacts.
+* **✨ Groups:** Named groups of people (a team, a family, a book club). Log once for everyone.
+* **🧩 Facts:** Flexible details on each person — single values or lists. Search in People covers facts, notes, tags and groups ("google", "jazz").
+* **🔔 Reminders:** Optional Sunday digest of who could use a hello, plus a heads-up on birthdays. Local notifications only.
+* **🔍 System Integration:** CoreSpotlight indexing and import from Apple Contacts.
 
 ---
 
-## Command Palette Syntax
+## Shortcut Syntax
 
-Orbit features a custom, zero-dependency token parser that maps operator characters to typed tokens.
+Plain language is the default. For people who prefer exact commands, the palette also understands operators at the start of a word:
 
-| Operator | Token Type | Example |
-|----------|-----------|---------|
-| `@` | Entity (Contact) | `@Sarah`, `@"Sarah Connor"` |
-| `!` | Impulse (Action) | `!Coffee`, `!Call` |
-| `#` | Tag | `#work`, `#catch-up` |
-| `>` | Artifact | `> birthday: March 12`, `> likes + Jazz` |
-| `^` | Time modifier | `^yesterday`, `^2d`, `^1w`, `^3m` |
-| `*` | Constellation | `*Family`, `*-Family` (remove) |
-| `"..."` | Quoted note | `"Discussed the new project"` |
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `@` | Person | `@Sarah`, `@"Sarah Connor"` |
+| `!` | Action | `!Coffee`, `!Call` |
+| `#` | Tag (also works in plain words) | `#work`, `#catch-up` |
+| `>` | Fact | `> birthday: 3 March`, `> likes + Jazz` |
+| `^` | When | `^yesterday`, `^2d`, `^1w`, `^last-monday`, `^"last monday"` |
+| `*` | Group | `*Family`, `*-Family` (remove) |
+| `"..."` | Note (unquoted leftover text is kept as the note too) | `"Discussed the new project"` |
 
-### Command Examples
+Operators only count at the start of a word, so values like `tom@gmail.com`, `Rock & Roll!` or a `t-shirt size` key are kept intact. An unknown `^` time is an error rather than silently "now".
 
 ```text
-@Sarah !Coffee #catch-up "fun chat" ^yesterday     → Log interaction
-@Sarah > birthday: March 12                        → Set artifact
-@Sarah > likes + Jazz                              → Append to list artifact
-@Sarah > likes - Jazz                              → Remove from list artifact
-@Sarah > city: void                                → Delete artifact
-@Sarah *Family                                     → Add to constellation
-@Sarah *-Family                                    → Remove from constellation
-*Family !Dinner #holiday                           → Log for entire group
-@Sarah                                             → Navigate to contact
-!undo                                              → Undo last interaction
-
+Coffee with Sarah yesterday, talked about her move  → Log (plain language)
+@Sarah !Coffee #catch-up "fun chat" ^yesterday      → Log (shortcut syntax)
+@Sarah coffee yesterday                             → Mix: person by @, rest in plain words
+@Sarah > birthday: 3 March                          → Set fact
+@Sarah > likes + Jazz   /   > likes - Jazz          → Add to / remove from a list fact
+@Sarah > city: void                                 → Delete fact
+@Sarah *Family   /   @Sarah *-Family                → Add to / remove from group
+*Family !Dinner #holiday                            → Log for the whole group
+Sarah                                               → Open Sarah
+!undo                                               → Undo the last change
 ```
 
 ---
@@ -91,8 +92,9 @@ Orbit is built on the philosophy that your relationships are your private busine
 
 Orbit uses a **Swiss/International Typographic Style** design system. The core principle is that typography *is* the interface—there are no decorative borders, cards, or shadows.
 
-* **Weight encodes relationship strength:** Inner Circle contacts render in `.heavy`; Deep Space contacts render in `.ultraLight`. This creates immediate visual hierarchy.
-* **Opacity encodes recency:** A contact seen today is fully opaque (1.0); someone unseen for over a year fades to 0.25.
+* **Weight encodes closeness, and only closeness:** Inner Circle names render bold, down to regular for Outer Orbit and Deep Space. The floor is `.regular` so every name stays legible.
+* **Recency is said in words:** "It's been 6 weeks" rather than fading the name, so the people you most need to see are never the hardest to read. Colour appears only where someone is overdue.
+* **Actions are visible:** Primary actions are buttons and swipe actions, not long-press-only menus.
 * **Adaptive Layouts:** A three-column `NavigationSplitView` on macOS/iPadOS, and a `TabView` on iOS. Supports System, Light, and Dark modes with selectable accent tints.
 
 ---
@@ -101,41 +103,39 @@ Orbit uses a **Swiss/International Typographic Style** design system. The core p
 
 ### Architecture
 
-Orbit follows a single-container SwiftData pattern. `OrbitApp` creates the `ModelContainer` once and passes it through the environment. A `CommandExecutor` acts as the single point of mutation for command-palette-driven writes.
+`OrbitApp` creates one `ModelContainer`, one `OrbitStore` and one `AppRouter` and passes them through the environment.
+
+* **`OrbitStore`** (`Orbit/Store`) is the only place that writes data. Every write refreshes the affected contacts' cached fields and Spotlight entries, saves (surfacing errors as a banner), and registers an undo step.
+* **`AppRouter`** (`Orbit/Navigation`) holds the selected tab, one selection per tab, and the app-wide sheets (palette, log composer, new contact, onboarding).
+* **`Orbit/Core`** is pure Foundation and unit-tested: `DatePhraseParser`, `CaptureParser` / `NaturalLanguageParser`, the sigil `CommandParser`, `NameMatcher`, `ActionVocabulary`, `AttentionEngine` and `Birthdays`.
+* **`LogComposer`** is the single logging form used from every screen.
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                     OrbitApp                            │
-│  ModelContainer · CommandExecutor · SpotlightIndexer    │
-│  DataValidator · AppStorage (theme/tint)                │
-└───────────────────────┬─────────────────────────────────┘
-                        │
-          ┌─────────────┼─────────────┐
-          ▼             ▼             ▼
-    ┌──────────┐  ┌──────────┐  ┌──────────┐
-    │  Views   │  │  Parser  │  │ Helpers  │
-    │          │  │          │  │          │
-    │ Content  │  │ Command  │  │ Data     │
-    │ People   │  │ Parser   │  │ Validator│
-    │ Contact  │  │ Command  │  │ Exts.    │
-    │ Detail   │  │ Executor │  │ Spotlight│
-    │ Palette  │  │ Token    │  │ Indexer  │
-    │ Settings │  │          │  │ Exporter │
-    └──────────┘  └──────────┘  └──────────┘
-
+input ─► CaptureParser ─► CaptureDraft ─► resolve names (OrbitStore) ─► preview ─► OrbitStore.log
+                                                                                  └─► undo step + banner
 ```
 
 ### Data Model
 
-Five SwiftData `@Model` entities under a single versioned schema (`OrbitSchemaV1`):
+Five SwiftData `@Model` entities. V2 adds fields only (all with defaults), so SwiftData's automatic lightweight migration and the CloudKit schema both accept them:
 
-| Entity | Purpose | Key Relationships |
+| Entity | Purpose | V2 additions |
 | --- | --- | --- |
-| **Contact** | A person in your network | Has many `Interaction`, `Artifact`; Many-to-many `Constellation` |
-| **Interaction** | A logged event (coffee, call, etc.) | Belongs to `Contact` |
-| **Artifact** | Structured metadata | Belongs to `Contact` |
-| **Tag** | Name registry for autocomplete | Standalone (assigned via `Interaction.tagNames` strings) |
-| **Constellation** | Named group of contacts | Many-to-many with `Contact` |
+| **Contact** | A person | `snoozedUntil`, `closenessConfirmed`, `searchText` |
+| **Interaction** | A logged event | — |
+| **Artifact** | A fact | `dateValue` (parsed birthdays/anniversaries) |
+| **Tag** | Name registry for autocomplete | — |
+| **Constellation** | A group | — |
+
+Model and property names stay as they are (CloudKit can't rename fields); the UI calls them people, logs, facts and groups. A one-time maintenance pass on first launch merges action spellings ("Text" → "Message"), lowercases tags and backfills the new fields.
+
+### Tests
+
+```bash
+swift test
+```
+
+Runs the `OrbitCoreTests` package target against `Orbit/Core`.
 
 ---
 

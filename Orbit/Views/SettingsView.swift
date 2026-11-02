@@ -730,6 +730,7 @@ struct SettingsView: View {
 
             // FIX P0-1.1: Initialize cached fields for new contacts
             newContact.refreshCachedFields()
+            newContact.refreshArtifactCache()
 
             importedCount += 1
         }
@@ -943,6 +944,7 @@ struct SettingsView: View {
 
                         // Refresh cached fields
                         contact.refreshCachedFields()
+                        contact.refreshArtifactCache()
                         importedContacts += 1
                     }
 
