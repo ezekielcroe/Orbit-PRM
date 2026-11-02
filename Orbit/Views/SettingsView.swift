@@ -866,6 +866,7 @@ struct SettingsView: View {
                         // V2 fields; older backups without them treat the
                         // closeness as confirmed when the orbit isn't the default.
                         contact.closenessConfirmed = contactDict["closenessConfirmed"] as? Bool ?? (targetOrbit != 2)
+                        for alias in contactDict["aliases"] as? [String] ?? [] { contact.addAlias(alias) }
                         if let snoozed = contactDict["snoozedUntil"] as? String {
                             contact.snoozedUntil = ISO8601DateFormatter().date(from: snoozed)
                         }

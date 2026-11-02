@@ -150,7 +150,7 @@ struct ConstellationRowView: View {
                             Circle()
                                 .fill(.orange)
                                 .frame(width: 5, height: 5)
-                            Text("\(stats.driftingCount) drifting")
+                            Text("\(stats.driftingCount) due")
                                 .font(OrbitTypography.footnote)
                                 .foregroundStyle(.orange)
                         }

@@ -28,9 +28,9 @@ struct OrbitCommands: Commands {
 
         CommandMenu("Navigate") {
             navButton("Today", .today, "1")
-            navButton("People", .people, "2")
-            navButton("Groups", .groups, "3")
-            navButton("Activity", .activity, "4")
+            navButton("Log", .log, "2")
+            navButton("People", .people, "3")
+            navButton("Groups", .groups, "4")
         }
     }
 

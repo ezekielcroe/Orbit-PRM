@@ -73,13 +73,13 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
             Text("Log in plain words")
                 .font(.system(size: 28, weight: .semibold))
-            Text("Tap \(Image(systemName: "square.and.pencil")) or press ⌘K and type what happened:")
+            Text("Open the Log tab (or press ⌘K on iPad and Mac) and type what happened:")
                 .font(OrbitTypography.body)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
                 Text("Coffee with Sarah yesterday, talked about her move")
-                Text("Called Mum about her surgery")
-                Text("Dinner with Sam and Jo on Friday")
+                Text("Texted my siblings about Mum's trip")
+                Text("Sarah's birthday is 3 March")
             }
             .font(OrbitTypography.bodyMedium)
             .padding(OrbitSpacing.md)

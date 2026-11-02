@@ -21,6 +21,7 @@ struct ConstellationDetailView: View {
 
     // Sheet State
     @State private var showAddMembers = false
+    @State private var showEditGroup = false
 
     // Select Mode State
     @State private var isSelecting = false
@@ -81,7 +82,32 @@ struct ConstellationDetailView: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
+        page
+            .navigationTitle(constellation.name)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { toolbarContent }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isSelecting {
+                    selectionBar
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isSelecting)
+            .sheet(isPresented: $showAddMembers) { addMembersSheet }
+            .sheet(isPresented: $showEditGroup) { editGroupSheet }
+            .alert(removeAlertTitle, isPresented: $showRemoveConfirmation) {
+                Button("Remove", role: .destructive) { removeSelectedMembers() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("They'll be removed from ✦ \(constellation.name). Nothing else about them changes, and you can undo this.")
+            }
+    }
+
+    // Split out of `body` so the type checker handles each piece on its own.
+
+    private var page: some View {
+        ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 masthead
                     .padding(.top, OrbitSpacing.lg)
@@ -101,29 +127,18 @@ struct ConstellationDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(OrbitColors.commandBackground.ignoresSafeArea())
-        .navigationTitle(constellation.name)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar { toolbarContent }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if isSelecting {
-                selectionBar
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: isSelecting)
-        .sheet(isPresented: $showAddMembers) {
-            AddMembersSheet(constellation: constellation)
-        }
-        .alert(
-            "Remove \(selectedMembers.count) Member\(selectedMembers.count == 1 ? "" : "s")?",
-            isPresented: $showRemoveConfirmation
-        ) {
-            Button("Remove", role: .destructive) { removeSelectedMembers() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("They'll be removed from ✦ \(constellation.name). Nothing else about them changes, and you can undo this.")
-        }
+    }
+
+    private var addMembersSheet: some View {
+        AddMembersSheet(constellation: constellation)
+    }
+
+    private var editGroupSheet: some View {
+        ConstellationFormSheet(editingConstellation: constellation)
+    }
+
+    private var removeAlertTitle: String {
+        "Remove \(selectedMembers.count) Member\(selectedMembers.count == 1 ? "" : "s")?"
     }
 
     // MARK: - Masthead
@@ -136,6 +151,12 @@ struct ConstellationDetailView: View {
             Text(statusSentence)
                 .font(OrbitTypography.body)
                 .foregroundStyle(driftingMembers.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+
+            if !constellation.aliasList.isEmpty {
+                Text(verbatim: "aka \(constellation.aliasList.joined(separator: ", "))")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -451,6 +472,7 @@ struct ConstellationDetailView: View {
                 router.log(group: constellation)
             }
             Menu {
+                Button("Edit group", systemImage: "pencil") { showEditGroup = true }
                 Button("Select Members", systemImage: "checkmark.circle") {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         isSelecting = true

@@ -15,7 +15,7 @@ struct ComposerRequest: Identifiable {
 @Observable
 final class AppRouter {
     enum Tab: Hashable, CaseIterable {
-        case today, people, groups, activity, settings
+        case today, log, people, groups, settings
     }
 
     var tab: Tab = .today
@@ -23,7 +23,7 @@ final class AppRouter {
     // One selection per tab.
     var todaySelection: Contact?
     var peopleSelection: Contact?
-    var activitySelection: Contact?
+    var logSelection: Contact?
     var groupSelection: Constellation?
     var groupMemberSelection: Contact?
 
@@ -51,7 +51,7 @@ final class AppRouter {
         let id = contact.id
         if todaySelection?.id == id { todaySelection = nil }
         if peopleSelection?.id == id { peopleSelection = nil }
-        if activitySelection?.id == id { activitySelection = nil }
+        if logSelection?.id == id { logSelection = nil }
         if groupMemberSelection?.id == id { groupMemberSelection = nil }
     }
 

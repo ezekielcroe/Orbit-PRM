@@ -45,6 +45,7 @@
 				OrbitCoreTests/CommandParserTests.swift,
 				OrbitCoreTests/DatePhraseParserTests.swift,
 				OrbitCoreTests/EngineTests.swift,
+				OrbitCoreTests/SmarterParserTests.swift,
 				OrbitCoreTests/TestSupport.swift,
 			);
 			target = FE4FCF7E2F4695DF006AF61B /* Orbit */;
@@ -56,6 +57,7 @@
 				OrbitCoreTests/CommandParserTests.swift,
 				OrbitCoreTests/DatePhraseParserTests.swift,
 				OrbitCoreTests/EngineTests.swift,
+				OrbitCoreTests/SmarterParserTests.swift,
 				OrbitCoreTests/TestSupport.swift,
 			);
 			target = FE9D1E13309896A800ABBAE2 /* OrbitTests */;

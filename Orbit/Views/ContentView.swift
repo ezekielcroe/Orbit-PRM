@@ -30,11 +30,11 @@ struct ContentView: View {
             }
             #endif
         }
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: toastAtTop ? .top : .bottom) {
             if let toast = store.toast {
                 ToastView(toast: toast)
-                    .padding(.bottom, OrbitSpacing.xl + OrbitSpacing.md)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(toastAtTop ? .top : .bottom, toastAtTop ? OrbitSpacing.sm : OrbitSpacing.xl + OrbitSpacing.md)
+                    .transition(.move(edge: toastAtTop ? .top : .bottom).combined(with: .opacity))
                     .id(toast.id)
             }
         }
@@ -86,6 +86,9 @@ struct ContentView: View {
         }
     }
 
+    /// In the Log tab the composer owns the bottom edge, so banners go on top.
+    private var toastAtTop: Bool { router.tab == .log }
+
     private func rescheduleNotifications() async {
         guard notificationsEnabled else { return }
         await NotificationScheduler.shared.reschedule(using: store)
@@ -102,9 +105,9 @@ struct ContentView: View {
             )) {
                 Section {
                     NavigationLink(value: AppRouter.Tab.today) { Label("Today", systemImage: "sun.max") }
+                    NavigationLink(value: AppRouter.Tab.log) { Label("Log", systemImage: "text.bubble") }
                     NavigationLink(value: AppRouter.Tab.people) { Label("People", systemImage: "person.2") }
                     NavigationLink(value: AppRouter.Tab.groups) { Label("Groups", systemImage: "star") }
-                    NavigationLink(value: AppRouter.Tab.activity) { Label("Activity", systemImage: "text.bubble") }
                 }
                 #if os(iOS)
                 // macOS uses the standard Settings window (⌘,).
@@ -126,8 +129,10 @@ struct ContentView: View {
             case .groups:
                 ConstellationListView(selectedConstellation: $router.groupSelection)
                     .navigationSplitViewColumnWidth(min: 250, ideal: 300)
-            case .activity:
-                InteractionsView(selectedContact: $router.activitySelection)
+            case .log:
+                NavigationStack {
+                    LogTabView(selectedContact: $router.logSelection)
+                }
                     .navigationSplitViewColumnWidth(min: 280, ideal: 360)
             case .settings:
                 SettingsView()
@@ -139,8 +144,8 @@ struct ContentView: View {
                     contactDetail(router.todaySelection, empty: "Pick someone from Today")
                 case .people:
                     contactDetail(router.peopleSelection, empty: "Choose someone from the list")
-                case .activity:
-                    contactDetail(router.activitySelection, empty: "Choose a log to see the person")
+                case .log:
+                    contactDetail(router.logSelection, empty: "Log something, or open someone from a log")
                 case .groups:
                     if let group = router.groupSelection {
                         ConstellationDetailView(constellation: group, selectedContact: $router.groupMemberSelection)
@@ -174,7 +179,8 @@ struct ContentView: View {
 
     // MARK: - Tab layout (iPhone)
     // Each tab has its own selection, so opening someone in Today no longer
-    // pushes them onto the People and Activity stacks too.
+    // pushes them onto the other tabs' stacks too.
+    // The Log tab sits second, by the thumb, and holds the capture composer.
 
     private var tabLayout: some View {
         @Bindable var router = router
@@ -182,10 +188,16 @@ struct ContentView: View {
             NavigationStack {
                 TodayView(selectedContact: $router.todaySelection)
                     .navigationDestination(item: $router.todaySelection) { ContactDetailView(contact: $0) }
-                    .toolbar { logButton }
             }
             .tabItem { Label("Today", systemImage: "sun.max") }
             .tag(AppRouter.Tab.today)
+
+            NavigationStack {
+                LogTabView(selectedContact: $router.logSelection)
+                    .navigationDestination(item: $router.logSelection) { ContactDetailView(contact: $0) }
+            }
+            .tabItem { Label("Log", systemImage: "square.and.pencil") }
+            .tag(AppRouter.Tab.log)
 
             NavigationStack {
                 PeopleView(selectedContact: $router.peopleSelection)
@@ -205,26 +217,10 @@ struct ContentView: View {
             .tag(AppRouter.Tab.groups)
 
             NavigationStack {
-                InteractionsView(selectedContact: $router.activitySelection)
-                    .navigationDestination(item: $router.activitySelection) { ContactDetailView(contact: $0) }
-            }
-            .tabItem { Label("Activity", systemImage: "text.bubble") }
-            .tag(AppRouter.Tab.activity)
-
-            NavigationStack {
                 SettingsView()
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(AppRouter.Tab.settings)
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var logButton: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button { router.openPalette() } label: {
-                Label("Log or find", systemImage: "square.and.pencil")
-            }
         }
     }
 }
