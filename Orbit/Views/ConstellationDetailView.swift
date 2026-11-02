@@ -14,15 +14,13 @@ import SwiftData
 // checkbox column.
 
 struct ConstellationDetailView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Bindable var constellation: Constellation
     @Binding var selectedContact: Contact?
 
-    // Sheet / Navigation State
-    @State private var showAddInteraction = false
-    @State private var editingInteraction: Interaction?
+    // Sheet State
     @State private var showAddMembers = false
-    @State private var contactToView: Contact?
 
     // Select Mode State
     @State private var isSelecting = false
@@ -114,14 +112,8 @@ struct ConstellationDetailView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isSelecting)
-        .sheet(isPresented: $showAddInteraction) {
-            ConstellationInteractionSheet(constellation: constellation)
-        }
         .sheet(isPresented: $showAddMembers) {
             AddMembersSheet(constellation: constellation)
-        }
-        .sheet(item: $editingInteraction) { interaction in
-            InteractionEditSheet(interaction: interaction)
         }
         .alert(
             "Remove \(selectedMembers.count) Member\(selectedMembers.count == 1 ? "" : "s")?",
@@ -130,10 +122,7 @@ struct ConstellationDetailView: View {
             Button("Remove", role: .destructive) { removeSelectedMembers() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will remove the selected contacts from ✦ \(constellation.name). Their data is not deleted.")
-        }
-        .navigationDestination(item: $contactToView) { contact in
-            ContactDetailView(contact: contact)
+            Text("They'll be removed from ✦ \(constellation.name). Nothing else about them changes, and you can undo this.")
         }
     }
 
@@ -157,9 +146,9 @@ struct ConstellationDetailView: View {
         let count = "\(activeMembers.count) member\(activeMembers.count == 1 ? "" : "s")"
         var clauses: [String] = []
         if !driftingMembers.isEmpty {
-            clauses.append("\(driftingMembers.count) drifting")
+            clauses.append("\(driftingMembers.count) due for a catch-up")
         } else {
-            clauses.append("everyone on cadence")
+            clauses.append("everyone on track")
         }
         if let avg = avgDaysSinceContact {
             clauses.append("average gap \(avg) day\(avg == 1 ? "" : "s")")
@@ -188,12 +177,9 @@ struct ConstellationDetailView: View {
                     Text("\(activeMembers.count)")
                         .font(OrbitTypography.footnote)
                         .foregroundStyle(.quaternary)
-                    Button { showAddMembers = true } label: {
-                        Text("Add")
-                            .font(OrbitTypography.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                    Button("Add") { showAddMembers = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
             }
 
@@ -227,13 +213,12 @@ struct ConstellationDetailView: View {
 
             Text(contact.name)
                 .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
 
             Spacer(minLength: OrbitSpacing.md)
 
             Text(contact.recencyDescription)
                 .font(OrbitTypography.caption)
-                .foregroundStyle(contact.isDrifting ? AnyShapeStyle(contact.driftColor) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(contact.isDrifting ? AnyShapeStyle(contact.driftColor) : AnyShapeStyle(.secondary))
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -241,15 +226,12 @@ struct ConstellationDetailView: View {
                 toggleMemberSelection(for: contact.id)
             } else {
                 selectedContact = contact
-                contactToView = contact
             }
         }
         .contextMenu {
-            Button("Remove from Constellation", systemImage: "person.badge.minus", role: .destructive) {
-                withAnimation {
-                    constellation.contacts?.removeAll { $0.id == contact.id }
-                    try? modelContext.save()
-                }
+            Button("Log…", systemImage: "plus.bubble") { router.log([contact]) }
+            Button("Remove from group", systemImage: "person.badge.minus", role: .destructive) {
+                withAnimation { store.removeFromGroup([contact], group: constellation) }
             }
         }
     }
@@ -307,10 +289,8 @@ struct ConstellationDetailView: View {
     }
 
     private func removeSelectedMembers() {
-        withAnimation {
-            constellation.contacts?.removeAll { selectedMembers.contains($0.id) }
-            try? modelContext.save()
-        }
+        let targets = activeMembers.filter { selectedMembers.contains($0.id) }
+        withAnimation { store.removeFromGroup(targets, group: constellation) }
         exitSelectMode()
     }
 
@@ -325,12 +305,9 @@ struct ConstellationDetailView: View {
                     Text("\(groupedMemberInteractions.count)")
                         .font(OrbitTypography.footnote)
                         .foregroundStyle(.quaternary)
-                    Button { showAddInteraction = true } label: {
-                        Text("Log")
-                            .font(OrbitTypography.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                    Button("Log for everyone") { router.log(group: constellation) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                 }
             }
 
@@ -419,8 +396,12 @@ struct ConstellationDetailView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+        .onTapGesture { router.edit(group.representative) }
         .contextMenu {
-            Button("Edit", systemImage: "pencil") { editingInteraction = group.representative }
+            Button("Edit", systemImage: "pencil") { router.edit(group.representative) }
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                store.delete(group.representative, includeBatch: true)
+            }
         }
     }
 
@@ -466,8 +447,8 @@ struct ConstellationDetailView: View {
             Button("Add Members", systemImage: "person.badge.plus") {
                 showAddMembers = true
             }
-            Button("Log Activity", systemImage: "plus.bubble") {
-                showAddInteraction = true
+            Button("Log for everyone", systemImage: "plus.bubble") {
+                router.log(group: constellation)
             }
             Menu {
                 Button("Select Members", systemImage: "checkmark.circle") {
@@ -485,7 +466,7 @@ struct ConstellationDetailView: View {
 // MARK: - Add Members Sheet
 
 struct AddMembersSheet: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     @Bindable var constellation: Constellation
@@ -502,7 +483,7 @@ struct AddMembersSheet: View {
         let available = allContacts.filter { !memberIDs.contains($0.id) }
         if searchText.isEmpty { return available }
         let query = searchText.lowercased()
-        return available.filter { $0.searchableName.contains(query) }
+        return available.filter { $0.matchesSearch(query) }
     }
 
     var body: some View {
@@ -512,7 +493,7 @@ struct AddMembersSheet: View {
                     ContentUnavailableView(
                         "Everyone's Here",
                         systemImage: "person.2.fill",
-                        description: Text("All your active contacts are already in this constellation.")
+                        description: Text("All your active contacts are already in this group.")
                     )
                 } else {
                     List {
@@ -614,15 +595,6 @@ struct AddMembersSheet: View {
 
     private func addSelectedMembers() {
         let contactsToAdd = allContacts.filter { selectedIDs.contains($0.id) }
-        for contact in contactsToAdd {
-            if !(constellation.contacts?.contains(where: { $0.id == contact.id }) ?? false) {
-                if constellation.contacts == nil {
-                    constellation.contacts = []
-                }
-                constellation.contacts?.append(contact)
-                contact.modifiedAt = Date()
-            }
-        }
-        try? modelContext.save()
+        store.addToGroup(contactsToAdd, group: constellation)
     }
 }

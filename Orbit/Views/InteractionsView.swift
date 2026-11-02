@@ -31,6 +31,8 @@ struct InteractionRowFramePreferenceKey: PreferenceKey {
 
 struct InteractionsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Binding var selectedContact: Contact?
 
     @Query(
@@ -41,7 +43,6 @@ struct InteractionsView: View {
     private var allInteractions: [Interaction]
 
     @State private var searchText = ""
-    @State private var editingInteraction: Interaction?
 
     // Selection State — tracks individual interaction IDs even when displayed as groups
     @State private var selectedInteractions: Set<UUID> = []
@@ -53,7 +54,6 @@ struct InteractionsView: View {
     @State private var isScrubbing = false
     
     @Query private var allConstellations: [Constellation]
-    @State private var constellationToView: Constellation?
 
     // MARK: - Computed Data
 
@@ -90,7 +90,7 @@ struct InteractionsView: View {
                 ContentUnavailableView(
                     "No Activity Yet",
                     systemImage: "text.bubble",
-                    description: Text("Interactions logged from the Command Palette or Contact pages will appear here chronologically.")
+                    description: Text("Everything you log appears here, newest first.")
                 )
                 .frame(maxHeight: .infinity)
             } else if filteredInteractions.isEmpty {
@@ -110,9 +110,6 @@ struct InteractionsView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: selectedInteractions.isEmpty)
-        .sheet(item: $editingInteraction) { interaction in
-            InteractionEditSheet(interaction: interaction)
-        }
         .sheet(isPresented: $showBatchEdit) {
             InteractionBatchEditSheet(
                 selectedCount: selectedInteractions.count,
@@ -121,9 +118,6 @@ struct InteractionsView: View {
                     showBatchEdit = false
                 }
             )
-        }
-        .navigationDestination(item: $constellationToView) { constellation in
-            ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
         }
     }
 
@@ -234,17 +228,19 @@ struct InteractionsView: View {
                 showContactNames: true,
                 showChevron: false
             )
-            .onTapGesture {
-                if group.isGroup {
-                    if let mutualName = group.mutualConstellationName,
-                       let constellation = allConstellations.first(where: { $0.name == mutualName }) {
-                        constellationToView = constellation
-                    } else {
-                        editingInteraction = group.representative
-                    }
-                } else {
-                    editingInteraction = group.representative
-                }
+            .onTapGesture { router.edit(group.representative) }
+        }
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { router.edit(group.representative) }
+            if let contact = group.contacts.first, !group.isGroup {
+                Button("Open \(contact.name)", systemImage: "person") { selectedContact = contact }
+            }
+            if let mutualName = group.mutualConstellationName,
+               let constellation = allConstellations.first(where: { $0.name == mutualName }) {
+                Button("Open ✦ \(constellation.name)", systemImage: "star") { router.open(constellation) }
+            }
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                store.delete(group.representative, includeBatch: true)
             }
         }
         .padding(.horizontal, OrbitSpacing.md)
@@ -326,46 +322,16 @@ struct InteractionsView: View {
     private func applyBatchEdit(_ edit: InteractionBatchEdit) {
         let descriptor = FetchDescriptor<Interaction>()
         guard let allFetched = try? modelContext.fetch(descriptor) else { return }
-
         let targets = allFetched.filter { selectedInteractions.contains($0.id) }
 
         if edit.deleteAll {
-            for interaction in targets {
-                interaction.isDeleted = true
-                interaction.contact?.refreshCachedFields()
-            }
-            try? modelContext.save()
-            withAnimation { selectedInteractions.removeAll() }
-            return
-        }
-
-        if !edit.tagsToAdd.isEmpty {
-            for interaction in targets {
-                let existing = interaction.tagList.map { $0.lowercased() }
-                let toAdd = edit.tagsToAdd.filter { !existing.contains($0.lowercased()) }
-                if !toAdd.isEmpty {
-                    if interaction.tagNames.trimmingCharacters(in: .whitespaces).isEmpty {
-                        interaction.tagNames = toAdd.joined(separator: ", ")
-                    } else {
-                        interaction.tagNames += ", " + toAdd.joined(separator: ", ")
-                    }
-                    interaction.contact?.modifiedAt = Date()
-                }
-            }
-            TagRegistry.ensureTagsExist(named: edit.tagsToAdd, in: modelContext)
-        }
-
-        if !edit.tagsToRemove.isEmpty {
-            let removeSet = Set(edit.tagsToRemove.map { $0.lowercased() })
-            for interaction in targets {
-                let current = interaction.tagList
-                let filtered = current.filter { !removeSet.contains($0.lowercased()) }
-                interaction.tagNames = filtered.joined(separator: ", ")
-                interaction.contact?.modifiedAt = Date()
+            store.delete(targets)
+        } else {
+            store.grouped("Edit tags", message: "Updated tags on \(targets.count) log\(targets.count == 1 ? "" : "s")") {
+                if !edit.tagsToAdd.isEmpty { store.setTags(edit.tagsToAdd, on: targets, mode: .add) }
+                if !edit.tagsToRemove.isEmpty { store.setTags(edit.tagsToRemove, on: targets, mode: .remove) }
             }
         }
-
-        try? modelContext.save()
         withAnimation { selectedInteractions.removeAll() }
     }
 }

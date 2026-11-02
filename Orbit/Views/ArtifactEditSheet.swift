@@ -12,7 +12,7 @@ import SwiftData
 struct ArtifactEditSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
+    @Environment(OrbitStore.self) private var store
     @Environment(DataValidator.self) private var validator
 
     let contact: Contact
@@ -167,7 +167,7 @@ struct ArtifactEditSheet: View {
                     }
                 }
             }
-            .navigationTitle(isEditing ? "Edit Artifact" : "Add Artifact")
+            .navigationTitle(isEditing ? "Edit fact" : "Add fact")
             .formStyle(.grouped)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -310,58 +310,22 @@ struct ArtifactEditSheet: View {
     }
 
     private func save() {
-        let trimmedKey = key.trimmingCharacters(in: .whitespaces)
-        let resolvedCategory: String? = {
-            if !category.isEmpty { return category }
-            return nil
-        }()
-
-        switch mode {
-        case .add:
-            let artifact = Artifact(key: trimmedKey, value: "", isArray: isArray, category: resolvedCategory)
-            artifact.contact = contact
-            modelContext.insert(artifact)
-
-            if isArray {
-                for item in arrayItems {
-                    artifact.appendValue(item)
-                }
-            } else {
-                artifact.setValue(value)
-            }
-
-        case .edit(let artifact):
-            artifact.key = trimmedKey
-            artifact.searchableKey = trimmedKey.lowercased()
-            // FIX 3: Save category
-            artifact.category = resolvedCategory
-
-            if isArray {
-                artifact.isArray = true
-                if let data = try? JSONEncoder().encode(arrayItems),
-                   let str = String(data: data, encoding: .utf8) {
-                    artifact.value = str
-                }
-            } else {
-                artifact.isArray = false
-                artifact.value = value
-            }
-
-            artifact.modifiedAt = Date()
-        }
-
-        contact.modifiedAt = Date()
-        spotlightIndexer.index(contact: contact)
-
-        try? modelContext.save()
+        let resolvedCategory: String? = category.isEmpty ? nil : category
+        var existing: Artifact?
+        if case .edit(let artifact) = mode { existing = artifact }
+        store.saveFact(
+            on: contact,
+            existing: existing,
+            key: key,
+            category: resolvedCategory,
+            values: isArray ? arrayItems : [value],
+            asList: isArray
+        )
     }
 
     private func deleteArtifact() {
         if case .edit(let artifact) = mode {
-            modelContext.delete(artifact)
-            contact.modifiedAt = Date()
-            spotlightIndexer.index(contact: contact)
-            try? modelContext.save()
+            store.deleteFacts([artifact])
         }
     }
 }

@@ -15,7 +15,7 @@ import SwiftData
 // Previously `ensureTagExists(named:)` was duplicated identically in:
 //   - CommandExecutor.swift
 //   - InteractionsView.swift
-//   - InteractionEditSheet.swift
+//   - (former) InteractionEditSheet.swift
 //
 // This consolidates it into one place to prevent drift.
 

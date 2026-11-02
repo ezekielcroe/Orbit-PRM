@@ -582,6 +582,17 @@ final class OrbitStore {
         }
     }
 
+    /// Permanent. Members are kept; only the group goes. Clears undo history.
+    func deleteGroup(_ group: Constellation) {
+        let name = group.name
+        let members = group.contacts ?? []
+        context.delete(group)
+        undoStack.removeAll()
+        refresh(members)
+        save("delete group")
+        show("Deleted ✦ \(name)", canUndo: false)
+    }
+
     /// Log for every active member of a group.
     @discardableResult
     func log(group: Constellation, action: String, note: String = "", tags: [String] = [], date: Date = Date()) -> [Interaction] {

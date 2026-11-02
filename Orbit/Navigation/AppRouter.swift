@@ -46,6 +46,15 @@ final class AppRouter {
         groupSelection = group
     }
 
+    /// Clear any selection pointing at a contact that is about to be deleted.
+    func forget(_ contact: Contact) {
+        let id = contact.id
+        if todaySelection?.id == id { todaySelection = nil }
+        if peopleSelection?.id == id { peopleSelection = nil }
+        if activitySelection?.id == id { activitySelection = nil }
+        if groupMemberSelection?.id == id { groupMemberSelection = nil }
+    }
+
     func openPalette(seed: String = "") {
         paletteSeed = seed
         showPalette = true

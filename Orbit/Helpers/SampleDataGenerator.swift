@@ -111,7 +111,9 @@ struct SampleDataGenerator {
 
         // ── Refresh all cached fields ──────────────────────────────
         for contact in allContacts {
+            contact.closenessConfirmed = true
             contact.refreshCachedFields()
+            contact.refreshArtifactCache()
         }
 
         // ── Save ───────────────────────────────────────────────────
@@ -136,7 +138,7 @@ struct SampleDataGenerator {
         let tagCount: Int
 
         var summary: String {
-            "\(contactCount) contacts, \(interactionCount) interactions, \(artifactCount) artifacts, \(constellationCount) constellations, and \(tagCount) tags."
+            "\(contactCount) contacts, \(interactionCount) logs, \(artifactCount) facts, \(constellationCount) groups, and \(tagCount) tags."
         }
     }
 
@@ -157,7 +159,7 @@ struct SampleDataGenerator {
         in context: ModelContext
     ) {
         let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
-        let interaction = Interaction(impulse: impulse, content: note ?? "", date: date)
+        let interaction = Interaction(impulse: ActionVocabulary.canonical(impulse), content: note ?? "", date: date)
         interaction.tagNames = tags.joined(separator: ", ")
         interaction.contact = contact
         context.insert(interaction)

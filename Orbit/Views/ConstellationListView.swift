@@ -4,7 +4,8 @@ import SwiftData
 // MARK: - ConstellationListView
 
 struct ConstellationListView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
+    @State private var groupToDelete: Constellation?
 
     @Query(sort: \Constellation.name)
     private var constellations: [Constellation]
@@ -17,11 +18,14 @@ struct ConstellationListView: View {
     var body: some View {
         Group {
             if constellations.isEmpty {
-                ContentUnavailableView(
-                    "No Constellations",
-                    systemImage: "star.circle",
-                    description: Text("Group related contacts into constellations.\nUse *GroupName in the command palette to create one.")
-                )
+                ContentUnavailableView {
+                    Label("No groups yet", systemImage: "star.circle")
+                } description: {
+                    Text("Groups let you log once for everyone — a team, a family, a book club.")
+                } actions: {
+                    Button("New group") { showAddSheet = true }
+                        .buttonStyle(.borderedProminent)
+                }
             } else {
                 List(selection: $selectedConstellation) {
                     ForEach(constellations) { constellation in
@@ -33,22 +37,35 @@ struct ConstellationListView: View {
                                 }
                                 
                                 Button("Delete", role: .destructive) {
-                                    modelContext.delete(constellation)
-                                    PersistenceHelper.saveWithLogging(modelContext, operation: "delete constellation")
+                                    groupToDelete = constellation
                                 }
-                                .tint(.blue)
                             }
                     }
                 }
             }
         }
-        .navigationTitle("Constellations")
+        .navigationTitle("Groups")
+        .confirmationDialog(
+            "Delete ✦ \(groupToDelete?.name ?? "")?",
+            isPresented: Binding(get: { groupToDelete != nil }, set: { if !$0 { groupToDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete group", role: .destructive) {
+                if let group = groupToDelete {
+                    if selectedConstellation?.id == group.id { selectedConstellation = nil }
+                    store.deleteGroup(group)
+                }
+                groupToDelete = nil
+            }
+        } message: {
+            Text("The people in it are kept. Their logs stay on their own timelines.")
+        }
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button {
                     showAddSheet = true
                 } label: {
-                    Image(systemName: "plus")
+                    Label("New group", systemImage: "plus")
                 }
             }
         }

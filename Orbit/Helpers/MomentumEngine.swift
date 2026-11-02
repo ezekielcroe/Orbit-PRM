@@ -120,30 +120,3 @@ enum MomentumEngine {
         try? context.save()
     }
 }
-
-// MARK: - Momentum Typography
-// Phase 3 of "typography IS the interface": weight encodes maintained
-// relationship strength (momentum) rather than intended strength (orbit).
-// Adopted by TodayView; other views can migrate call sites from
-// contactName(orbit:) as desired.
-
-extension OrbitTypography {
-
-    static func contactName(momentum: Double) -> Font {
-        .system(size: 17, weight: weightForMomentum(momentum), design: .default)
-    }
-
-    static func contactNameLarge(momentum: Double) -> Font {
-        .system(size: 28, weight: weightForMomentum(momentum), design: .default)
-    }
-
-    private static func weightForMomentum(_ momentum: Double) -> Font.Weight {
-        switch momentum {
-        case 1.5...: return .heavy
-        case 1.0..<1.5: return .bold
-        case 0.6..<1.0: return .medium
-        case 0.3..<0.6: return .light
-        default: return .ultraLight
-        }
-    }
-}

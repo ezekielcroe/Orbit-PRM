@@ -131,7 +131,6 @@ struct TagDetailSheet: View {
                             HStack {
                                 Text(item.contact.name)
                                     .font(OrbitTypography.contactName(orbit: item.contact.targetOrbit))
-                                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: item.contact.daysSinceLastContact))
 
                                 Spacer()
 
