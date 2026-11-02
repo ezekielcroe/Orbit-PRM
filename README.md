@@ -10,12 +10,11 @@ Orbit is designed around "Orbit Zones" to manage your interaction cadence and fe
 
 1. [The Concept](#the-concept)
 2. [Core Features](#core-features)
-3. [Command Palette Syntax](#command-palette-syntax)
-4. [Privacy & Data Ownership](#privacy--data-ownership)
-5. [Design System](#design-system)
-6. [Under the Hood](#under-the-hood)
-7. [Installation & Requirements](#installation--requirements)
-8. [License](#license)
+3. [Privacy & Data Ownership](#privacy--data-ownership)
+4. [Design System](#design-system)
+5. [Under the Hood](#under-the-hood)
+6. [Installation & Requirements](#installation--requirements)
+7. [License](#license)
 
 ---
 
@@ -41,38 +40,6 @@ Orbit models your relationships as a solar system. The people closest to you liv
 * **🧩 Custom Artifacts:** Add flexible, custom data to contacts without rigid forms. Supports singleton values (`> birthday: March 12`) and array values (`> likes + Jazz`). Category auto-detection intelligently groups artifacts.
 * **🔍 System Integration:** Contacts are indexed via CoreSpotlight, making them searchable system-wide. Easily import names and metadata from your Apple Contacts with built-in deduplication.
 * **🗄 Bulk Management:** Multi-select contacts to change orbit zones, archive, restore, or manage constellation memberships in bulk.
-
----
-
-## Command Palette Syntax
-
-Orbit features a custom, zero-dependency token parser that maps operator characters to typed tokens.
-
-| Operator | Token Type | Example |
-|----------|-----------|---------|
-| `@` | Entity (Contact) | `@Sarah`, `@"Sarah Connor"` |
-| `!` | Impulse (Action) | `!Coffee`, `!Call` |
-| `#` | Tag | `#work`, `#catch-up` |
-| `>` | Artifact | `> birthday: March 12`, `> likes + Jazz` |
-| `^` | Time modifier | `^yesterday`, `^2d`, `^1w`, `^3m` |
-| `*` | Constellation | `*Family`, `*-Family` (remove) |
-| `"..."` | Quoted note | `"Discussed the new project"` |
-
-### Command Examples
-
-```text
-@Sarah !Coffee #catch-up "fun chat" ^yesterday     → Log interaction
-@Sarah > birthday: March 12                        → Set artifact
-@Sarah > likes + Jazz                              → Append to list artifact
-@Sarah > likes - Jazz                              → Remove from list artifact
-@Sarah > city: void                                → Delete artifact
-@Sarah *Family                                     → Add to constellation
-@Sarah *-Family                                    → Remove from constellation
-*Family !Dinner #holiday                           → Log for entire group
-@Sarah                                             → Navigate to contact
-!undo                                              → Undo last interaction
-
-```
 
 ---
 
