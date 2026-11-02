@@ -179,7 +179,7 @@ final class Contact {
             parts.append(contentsOf: artifact.listValues)
         }
         parts.append(contentsOf: tagNames ?? cachedTagSummary.split(separator: ",").map(String.init))
-        parts.append(contentsOf: (constellations ?? []).map(\.name))
+        parts.append(contentsOf: (constellations ?? []).flatMap { [$0.name] + $0.aliasList })
         searchText = parts
             .filter { !$0.isEmpty }
             .joined(separator: " \u{1F} ")   // unit separator keeps fields from running together

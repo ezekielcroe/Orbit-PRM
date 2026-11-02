@@ -22,6 +22,7 @@ struct ConstellationFormSheet: View {
 
     @State private var name: String
     @State private var notes: String
+    @State private var aliasesText: String
     
     // Track selections by UUID for safe State management
     @State private var selectedContactIDs: Set<UUID>
@@ -33,10 +34,12 @@ struct ConstellationFormSheet: View {
         if let constellation = editingConstellation {
             _name = State(initialValue: constellation.name)
             _notes = State(initialValue: constellation.notes)
+            _aliasesText = State(initialValue: constellation.aliases)
             _selectedContactIDs = State(initialValue: Set((constellation.contacts ?? []).map(\.id)))
         } else {
             _name = State(initialValue: "")
             _notes = State(initialValue: "")
+            _aliasesText = State(initialValue: "")
             _selectedContactIDs = State(initialValue: [])
         }
     }
@@ -50,6 +53,18 @@ struct ConstellationFormSheet: View {
                         .lineLimit(2...4)
                 }
                 
+                Section {
+                    TextField("e.g. siblings, the sibs", text: $aliasesText)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                } header: {
+                    Text("Also known as")
+                } footer: {
+                    Text("Other names you use for this group when logging, like “texted the sibs”. Orbit adds these itself when you pick this group for a phrase in Log.")
+                }
+
                 Section {
                     NavigationLink {
                         ContactSelectionView(
@@ -106,9 +121,14 @@ struct ConstellationFormSheet: View {
     private func save() {
         let selectedContacts = allContacts.filter { selectedContactIDs.contains($0.id) }
         
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let aliases = aliasesText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+
         if let constellation = editingConstellation {
-            constellation.name = name
+            constellation.name = trimmedName
+            constellation.searchableName = trimmedName.lowercased()
             constellation.notes = notes
+            setAliases(aliases, on: constellation)
             
             // 1. Safely map and filter using ?? []
             let existingIDs = Set((constellation.contacts ?? []).map(\.id))
@@ -132,7 +152,8 @@ struct ConstellationFormSheet: View {
             }
             
         } else {
-            let constellation = Constellation(name: name, notes: notes)
+            let constellation = Constellation(name: trimmedName, notes: notes)
+            setAliases(aliases, on: constellation)
             constellation.contacts = selectedContacts
             
             for contact in selectedContacts {
@@ -146,6 +167,11 @@ struct ConstellationFormSheet: View {
         store.refresh(store.activeContacts(includeArchived: true))
         store.save("save group")
         dismiss()
+    }
+
+    private func setAliases(_ aliases: [String], on group: Constellation) {
+        group.aliases = ""
+        for alias in aliases { group.addAlias(alias) }
     }
 }
 

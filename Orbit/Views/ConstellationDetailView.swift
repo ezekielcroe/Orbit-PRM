@@ -21,6 +21,7 @@ struct ConstellationDetailView: View {
 
     // Sheet State
     @State private var showAddMembers = false
+    @State private var showEditGroup = false
 
     // Select Mode State
     @State private var isSelecting = false
@@ -115,6 +116,9 @@ struct ConstellationDetailView: View {
         .sheet(isPresented: $showAddMembers) {
             AddMembersSheet(constellation: constellation)
         }
+        .sheet(isPresented: $showEditGroup) {
+            ConstellationFormSheet(editingConstellation: constellation)
+        }
         .alert(
             "Remove \(selectedMembers.count) Member\(selectedMembers.count == 1 ? "" : "s")?",
             isPresented: $showRemoveConfirmation
@@ -136,6 +140,12 @@ struct ConstellationDetailView: View {
             Text(statusSentence)
                 .font(OrbitTypography.body)
                 .foregroundStyle(driftingMembers.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+
+            if !constellation.aliasList.isEmpty {
+                Text("aka " + constellation.aliasList.joined(separator: ", "))
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -451,6 +461,7 @@ struct ConstellationDetailView: View {
                 router.log(group: constellation)
             }
             Menu {
+                Button("Edit group", systemImage: "pencil") { showEditGroup = true }
                 Button("Select Members", systemImage: "checkmark.circle") {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         isSelecting = true
