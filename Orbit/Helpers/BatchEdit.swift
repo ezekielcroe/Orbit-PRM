@@ -41,20 +41,17 @@ struct BatchActionSheet: View {
             Form {
                 // 1. Orbit Zone Change
                 Section {
-                    Picker("Move to Orbit", selection: $edit.orbitZone) {
+                    Picker("Closeness", selection: $edit.orbitZone) {
                         Text("No Change").tag(Int?.none)
                         Divider()
-                        // Using your 0-4 orbit integers
-                        Text("Inner Circle").tag(Int?.some(0))
-                        Text("Near Orbit").tag(Int?.some(1))
-                        Text("Mid Orbit").tag(Int?.some(2))
-                        Text("Outer Orbit").tag(Int?.some(3))
-                        Text("Deep Space").tag(Int?.some(4))
+                        ForEach(OrbitZone.allZones, id: \.id) { zone in
+                            Text("\(zone.name) · \(AttentionEngine.cadenceWord(forOrbit: zone.id))").tag(Int?.some(zone.id))
+                        }
                     }
                 } header: {
-                    Text("Orbit")
+                    Text("Closeness")
                 } footer: {
-                    Text("Updates the expected contact cadence for all selected people.")
+                    Text("Sets how often you'd like to be in touch with everyone selected.")
                 }
                 
                 // 2. Archive Status Change
@@ -68,7 +65,7 @@ struct BatchActionSheet: View {
                 
                 // 3. Constellation Management
                 if !allConstellations.isEmpty {
-                    Section("Constellations") {
+                    Section("Groups") {
                         NavigationLink {
                             ConstellationSelectionList(
                                 title: "Add to...",
@@ -77,7 +74,7 @@ struct BatchActionSheet: View {
                             )
                         } label: {
                             HStack {
-                                Text("Add to Constellations")
+                                Text("Add to groups")
                                 Spacer()
                                 if !edit.constellationsToAdd.isEmpty {
                                     Text("\(edit.constellationsToAdd.count)")
@@ -94,7 +91,7 @@ struct BatchActionSheet: View {
                             )
                         } label: {
                             HStack {
-                                Text("Remove from Constellations")
+                                Text("Remove from groups")
                                 Spacer()
                                 if !edit.constellationsToRemove.isEmpty {
                                     Text("\(edit.constellationsToRemove.count)")
@@ -153,7 +150,7 @@ struct BatchActionSheet: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This action cannot be undone. It will permanently delete these contacts, all their artifacts, and their entire interaction history.")
+                Text("This action cannot be undone. It will permanently delete these contacts, their facts and their entire history.")
             }
         }
         #if os(macOS)

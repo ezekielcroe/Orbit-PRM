@@ -2,61 +2,50 @@
 //  ConstellationDetailView.swift
 //  Orbit
 //
-//  Created by Zhi Zheng Yeo on 27/2/26.
-//
 
 import SwiftUI
 import SwiftData
 
-// MARK: - Row Geometry Tracking for Drag-to-Select (Constellation Members)
-
-struct MemberRowFrameData: Equatable {
-    let id: UUID
-    let frame: CGRect
-}
-
-struct MemberRowFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [MemberRowFrameData] = []
-    static func reduce(value: inout [MemberRowFrameData], nextValue: () -> [MemberRowFrameData]) {
-        value.append(contentsOf: nextValue())
-    }
-}
-
 // MARK: - Constellation Detail View
+// Editorial one-pager, matching ContactDetailView's grammar.
+// Single scroll: name → status sentence → notes lede → member roster →
+// flush timeline. Color appears only where drift does. Batch member
+// removal lives behind an explicit Select mode instead of a permanent
+// checkbox column.
 
 struct ConstellationDetailView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Bindable var constellation: Constellation
     @Binding var selectedContact: Contact?
-    
-    // Facet State
-    enum DetailTab { case members, activity }
-    @State private var selectedTab: DetailTab = .members
-    
-    @State private var showAddInteraction = false
-    @State private var editingInteraction: Interaction?
+
+    // Sheet State
     @State private var showAddMembers = false
 
-    // Member Selection State
+    // Select Mode State
+    @State private var isSelecting = false
     @State private var selectedMembers: Set<UUID> = []
     @State private var showRemoveConfirmation = false
-    @State private var contactToView: Contact?
 
-    // Drag-to-select State
-    @State private var memberRowFrames: [MemberRowFrameData] = []
-    @State private var dragSelectionState: Bool? = nil
-    @State private var isScrubbing = false
+    // Timeline State
+    @State private var collapsedMonths: Set<String> = []   // empty = everything visible
+
+    private let dateGutterWidth: CGFloat = 52
 
     // MARK: - Computed Data
-    
+
+    /// Drifting members first (most severe on top), then the rest A–Z.
+    /// The roster doubles as a review surface: who needs attention leads.
     private var activeMembers: [Contact] {
-        (constellation.contacts ?? [])
-            .filter { !$0.isArchived }
+        let members = (constellation.contacts ?? []).filter { !$0.isArchived }
+        let drifting = members.filter(\.isDrifting).sorted { $0.driftRatio > $1.driftRatio }
+        let onCadence = members.filter { !$0.isDrifting }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return drifting + onCadence
     }
 
     private var driftingMembers: [Contact] {
-        activeMembers.filter { $0.isDrifting }
+        activeMembers.filter(\.isDrifting)
     }
 
     private var avgDaysSinceContact: Int? {
@@ -66,20 +55,12 @@ struct ConstellationDetailView: View {
     }
 
     private var groupedMemberInteractions: [InteractionGroup] {
-        // 1. Fetch and flatten all interactions
         let allInteractions = activeMembers.flatMap { $0.interactions ?? [] }
-        
-        // 2. Filter out soft-deleted ones
         let activeInteractions = allInteractions.filter { !$0.isDeleted }
-        
-        // 3. Group by batchID. (Using UUID() as a fallback perfectly ensures solo interactions stay in their own groups)
         let grouped = Dictionary(grouping: activeInteractions) { interaction in
             interaction.batchID ?? UUID()
         }
-        
-        // 4. Map to groups using a STABLE identifier
-        return grouped.map { (key, interactions) in
-            // If the key is the batchID, use that. Otherwise, use the interaction's persistent ID.
+        return grouped.map { (_, interactions) in
             InteractionGroup(
                 id: interactions.first?.batchID ?? UUID(),
                 interactions: interactions
@@ -88,108 +69,49 @@ struct ConstellationDetailView: View {
         .sorted { $0.date > $1.date }
     }
 
-    private var sharedTagStats: [(name: String, count: Int)] {
-            var tagCounts: [String: Int] = [:]
-            for contact in activeMembers {
-                let tags = contact.cachedTagSummary.split(separator: ",")
-                for tag in tags {
-                    let name = tag.trimmingCharacters(in: .whitespaces)
-                    if !name.isEmpty {
-                        tagCounts[name, default: 0] += 1
-                    }
-                }
-            }
-            return tagCounts
-                .sorted { $0.value > $1.value }
-                .map { (name: $0.key, count: $0.value) }
+    /// Timeline grouped by month, mirroring ContactDetailView.
+    private var groupedByMonth: [(key: String, groups: [InteractionGroup])] {
+        let byMonth = Dictionary(grouping: groupedMemberInteractions) {
+            $0.date.formatted(.dateTime.year().month(.wide))
         }
+        return byMonth.map { (key: $0.key, groups: $0.value.sorted { $0.date > $1.date }) }
+            .sorted { ($0.groups.first?.date ?? .distantPast) > ($1.groups.first?.date ?? .distantPast) }
+    }
 
     // MARK: - Body
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                
-                // 1. The Sticky Hero Header
-                constellationHeader
-                    .padding(.bottom, OrbitSpacing.md)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                masthead
+                    .padding(.top, OrbitSpacing.lg)
+                    .padding(.bottom, OrbitSpacing.xl)
 
-                // 2. The Pinned Facet Toggle
-                Section {
-                    switch selectedTab {
-                    case .members:
-                        membersFacet
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    case .activity:
-                        activityFacet
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                } header: {
-                    facetPicker
+                if !constellation.notes.isEmpty {
+                    lede
+                        .padding(.bottom, OrbitSpacing.xl)
                 }
+
+                membersSection
+                timelineSection
             }
+            .padding(.horizontal, OrbitSpacing.lg)
+            .padding(.bottom, OrbitSpacing.xxxl)
+            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollDisabled(isScrubbing)
-        .coordinateSpace(name: "MemberTableSpace")
-        .onPreferenceChange(MemberRowFramePreferenceKey.self) { frames in
-            self.memberRowFrames = frames
-        }
-        // Scrub Selection Gesture (only activates in checkbox column)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    guard selectedTab == .members else { return }
-                    guard value.startLocation.x < 50 else { return }
-
-                    if !isScrubbing {
-                        isScrubbing = true
-                    }
-
-                    if let row = memberRowFrames.first(where: {
-                        $0.frame.minY <= value.location.y && $0.frame.maxY >= value.location.y
-                    }) {
-                        if dragSelectionState == nil {
-                            dragSelectionState = !selectedMembers.contains(row.id)
-                        }
-
-                        if dragSelectionState == true {
-                            selectedMembers.insert(row.id)
-                        } else {
-                            selectedMembers.remove(row.id)
-                        }
-                    }
-                }
-                .onEnded { _ in
-                    isScrubbing = false
-                    dragSelectionState = nil
-                }
-        )
         .background(OrbitColors.commandBackground.ignoresSafeArea())
         .navigationTitle(constellation.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .overlay(alignment: .bottom) {
-            if !selectedMembers.isEmpty {
-                floatingActionBar
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .padding(.bottom, OrbitSpacing.xl)
+        .toolbar { toolbarContent }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSelecting {
+                selectionBar
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: selectedMembers.isEmpty)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Add Members", systemImage: "person.badge.plus") {
-                    showAddMembers = true
-                }
-                Button("Log Activity", systemImage: "plus.bubble") {
-                    showAddInteraction = true
-                }
-            }
-        }
-        .sheet(isPresented: $showAddInteraction) {
-            ConstellationInteractionSheet(constellation: constellation)
-        }
+        .animation(.easeInOut(duration: 0.2), value: isSelecting)
         .sheet(isPresented: $showAddMembers) {
             AddMembersSheet(constellation: constellation)
         }
@@ -197,206 +119,120 @@ struct ConstellationDetailView: View {
             "Remove \(selectedMembers.count) Member\(selectedMembers.count == 1 ? "" : "s")?",
             isPresented: $showRemoveConfirmation
         ) {
-            Button("Remove", role: .destructive) {
-                removeSelectedMembers()
-            }
+            Button("Remove", role: .destructive) { removeSelectedMembers() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will remove the selected contacts from ✦ \(constellation.name). Their data is not deleted.")
-        }
-        .onChange(of: selectedTab) { _, _ in
-            selectedMembers.removeAll()
-        }
-        .navigationDestination(item: $contactToView) { contact in
-                    ContactDetailView(contact: contact)
-        }
-        .sheet(item: $editingInteraction) { interaction in
-            InteractionEditSheet(interaction: interaction)
+            Text("They'll be removed from ✦ \(constellation.name). Nothing else about them changes, and you can undo this.")
         }
     }
 
-    // MARK: - Hero Header
+    // MARK: - Masthead
 
-    private var constellationHeader: some View {
-        VStack(spacing: OrbitSpacing.md) {
-            // Icon
-            ZStack {
-                Circle()
-                    .fill(Color.purple.opacity(0.1))
-                    .frame(width: 80, height: 80)
-                
-                Image(systemName: "star.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.purple)
-            }
-            .padding(.top, OrbitSpacing.md)
+    private var masthead: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            Text("✦ \(constellation.name)")
+                .font(.system(size: 28, weight: .semibold, design: .default))
 
-            // Title & Notes
-            VStack(spacing: OrbitSpacing.xs) {
-                Text(constellation.name)
-                    .font(.system(size: 28, weight: .semibold, design: .default))
-                    .multilineTextAlignment(.center)
-
-                if !constellation.notes.isEmpty {
-                    Text(constellation.notes)
-                        .font(OrbitTypography.body)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, OrbitSpacing.lg)
-                }
-            }
-
-            // Group Stats
-            HStack(spacing: OrbitSpacing.lg) {
-                statBadge("\(activeMembers.count)", label: "Members", icon: "person.2")
-
-                if let avg = avgDaysSinceContact {
-                    statBadge("\(avg)d", label: "Avg gap", icon: "clock")
-                }
-
-                if !driftingMembers.isEmpty {
-                    statBadge("\(driftingMembers.count)", label: "Drifting", icon: "exclamationmark.circle", color: .orange)
-                }
-                
-                statBadge("\(groupedMemberInteractions.count)", label: "Events", icon: "text.bubble")
-            }
-            .padding(.top, OrbitSpacing.xs)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func statBadge(_ value: String, label: String, icon: String, color: Color = .secondary) -> some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption2)
-                    .foregroundStyle(color)
-                Text(value)
-                    .font(OrbitTypography.captionMedium)
-                    .foregroundStyle(color)
-            }
-            Text(label)
-                .font(OrbitTypography.footnote)
-                .foregroundStyle(.tertiary)
+            Text(statusSentence)
+                .font(OrbitTypography.body)
+                .foregroundStyle(driftingMembers.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
         }
     }
 
-    // MARK: - Facet Picker
-
-    private var facetPicker: some View {
-        VStack(spacing: 0) {
-            Picker("View", selection: $selectedTab.animation(.easeInOut(duration: 0.2))) {
-                Text("Members").tag(DetailTab.members)
-                Text("Activity").tag(DetailTab.activity)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.vertical, OrbitSpacing.sm)
-            
-            Divider()
+    private var statusSentence: String {
+        guard !activeMembers.isEmpty else {
+            return "No active members yet."
         }
-        .background(.regularMaterial)
+        let count = "\(activeMembers.count) member\(activeMembers.count == 1 ? "" : "s")"
+        var clauses: [String] = []
+        if !driftingMembers.isEmpty {
+            clauses.append("\(driftingMembers.count) due for a catch-up")
+        } else {
+            clauses.append("everyone on track")
+        }
+        if let avg = avgDaysSinceContact {
+            clauses.append("average gap \(avg) day\(avg == 1 ? "" : "s")")
+        }
+        return "\(count) — \(clauses.joined(separator: ", "))."
     }
 
-    // MARK: - Members Facet
+    // MARK: - Lede
 
-    private var membersFacet: some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.xl) {
-            
-            // Current Members
-            VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-                HStack {
-                    Text("CURRENT MEMBERS")
-                        .font(OrbitTypography.captionMedium)
-                        .tracking(1.5)
-                        .foregroundStyle(.secondary)
+    private var lede: some View {
+        Text(constellation.notes)
+            .font(OrbitTypography.headline.weight(.regular))
+            .lineSpacing(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Members Section
+    // Flush roster: name in orbit weight with recency opacity, recency
+    // right-aligned. Drifting members lead. Tap navigates; long-press
+    // removes; Select mode enables batch removal.
+
+    private var membersSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionRule(label: "MEMBERS") {
+                HStack(spacing: OrbitSpacing.md) {
+                    Text("\(activeMembers.count)")
+                        .font(OrbitTypography.footnote)
+                        .foregroundStyle(.quaternary)
+                    Button("Add") { showAddMembers = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
-                .padding(.horizontal, OrbitSpacing.lg)
+            }
 
-                if activeMembers.isEmpty {
-                    Text("No active members.")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, OrbitSpacing.lg)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(activeMembers) { contact in
-                            memberRow(contact)
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: MemberRowFramePreferenceKey.self,
-                                            value: [MemberRowFrameData(
-                                                id: contact.id,
-                                                frame: geo.frame(in: .named("MemberTableSpace"))
-                                            )]
-                                        )
-                                    }
-                                )
-                            Divider()
-                                .padding(.leading, 44)
-                        }
+            if activeMembers.isEmpty {
+                Text("No active members.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, OrbitSpacing.md)
+                    .padding(.bottom, OrbitSpacing.xl)
+            } else {
+                VStack(alignment: .leading, spacing: OrbitSpacing.md) {
+                    ForEach(activeMembers) { contact in
+                        memberRow(contact)
                     }
                 }
+                .padding(.top, OrbitSpacing.md)
+                .padding(.bottom, OrbitSpacing.xl)
             }
-            .padding(.top, OrbitSpacing.md)
-
-            // Bottom spacer for floating bar clearance
-            Color.clear
-                .frame(height: 80)
         }
-        .padding(.bottom, OrbitSpacing.xxxl)
     }
 
     private func memberRow(_ contact: Contact) -> some View {
         let isSelected = selectedMembers.contains(contact.id)
 
-        return HStack(spacing: OrbitSpacing.md) {
-            // Checkbox Column
-            Button {
-                toggleMemberSelection(for: contact.id)
-            } label: {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? .blue : .secondary)
-                    .padding(.vertical, OrbitSpacing.sm)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            // Drift indicator
-            if contact.isDrifting {
-                Circle()
-                    .fill(contact.driftColor)
-                    .frame(width: 6, height: 6)
-            } else {
-                Color.clear.frame(width: 6, height: 6)
+        return HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
+            if isSelecting {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.body)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
             }
 
-            // Content Column (tap navigates to contact)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(contact.name)
-                    .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
-                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
+            Text(contact.name)
+                .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
 
-                Text(contact.recencyDescription)
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(contact.isDrifting ? contact.driftColor : .secondary)
-            }
+            Spacer(minLength: OrbitSpacing.md)
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.quaternary)
+            Text(contact.recencyDescription)
+                .font(OrbitTypography.caption)
+                .foregroundStyle(contact.isDrifting ? AnyShapeStyle(contact.driftColor) : AnyShapeStyle(.secondary))
         }
-        .padding(.vertical, OrbitSpacing.sm)
-        .padding(.horizontal, OrbitSpacing.md)
-        .background(isSelected ? Color.blue.opacity(0.05) : Color.secondary.opacity(0.02))
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedContact = contact // Keeps global state in sync
-            contactToView = contact   // Triggers the push
+            if isSelecting {
+                toggleMemberSelection(for: contact.id)
+            } else {
+                selectedContact = contact
+            }
+        }
+        .contextMenu {
+            Button("Log…", systemImage: "plus.bubble") { router.log([contact]) }
+            Button("Remove from group", systemImage: "person.badge.minus", role: .destructive) {
+                withAnimation { store.removeFromGroup([contact], group: constellation) }
+            }
         }
     }
 
@@ -410,111 +246,227 @@ struct ConstellationDetailView: View {
         }
     }
 
-    // MARK: - Floating Action Bar
+    // MARK: - Selection Bar
+    // Plain bottom bar in Select mode: hairline, text actions, no capsule.
 
-    private var floatingActionBar: some View {
-        HStack(spacing: OrbitSpacing.md) {
-            Text("\(selectedMembers.count) selected")
-                .font(OrbitTypography.captionMedium)
-                .foregroundStyle(.primary)
-
+    private var selectionBar: some View {
+        VStack(spacing: 0) {
             Divider()
-                .frame(height: 16)
+            HStack(spacing: OrbitSpacing.lg) {
+                Text("\(selectedMembers.count) selected")
+                    .font(OrbitTypography.captionMedium)
 
-            Button("Select All") {
-                selectedMembers = Set(activeMembers.map(\.id))
-            }
-            .font(OrbitTypography.caption)
-            .foregroundStyle(.blue)
+                Button("Select All") {
+                    selectedMembers = Set(activeMembers.map(\.id))
+                }
+                .font(OrbitTypography.caption)
 
-            Spacer()
+                Spacer()
 
-            Button {
-                selectedMembers.removeAll()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+                Button("Remove", role: .destructive) {
+                    showRemoveConfirmation = true
+                }
+                .font(OrbitTypography.captionMedium)
+                .disabled(selectedMembers.isEmpty)
+
+                Button("Done") {
+                    exitSelectMode()
+                }
+                .font(OrbitTypography.captionMedium)
             }
             .buttonStyle(.plain)
-
-            Button {
-                showRemoveConfirmation = true
-            } label: {
-                Label("Remove", systemImage: "person.badge.minus")
-                    .font(OrbitTypography.captionMedium)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.regular)
+            .padding(.horizontal, OrbitSpacing.lg)
+            .padding(.vertical, OrbitSpacing.md)
+            .background(OrbitColors.commandBackground)
         }
-        .padding(.horizontal, OrbitSpacing.lg)
-        .padding(.vertical, OrbitSpacing.sm)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
     }
 
-    // MARK: - Remove Selected Members
-
-    private func removeSelectedMembers() {
-        withAnimation {
-            constellation.contacts?.removeAll { selectedMembers.contains($0.id) }
-            try? modelContext.save()
+    private func exitSelectMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isSelecting = false
             selectedMembers.removeAll()
         }
     }
 
-    // MARK: - Activity Facet
+    private func removeSelectedMembers() {
+        let targets = activeMembers.filter { selectedMembers.contains($0.id) }
+        withAnimation { store.removeFromGroup(targets, group: constellation) }
+        exitSelectMode()
+    }
 
-    private var activityFacet: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text("TIMELINE")
-                    .font(OrbitTypography.captionMedium)
-                    .tracking(1.5)
-                    .foregroundStyle(.secondary)
+    // MARK: - Timeline Section
+    // Group events flush-left with a date gutter, month headers expanded
+    // by default. Participants render as a plain text line.
+
+    private var timelineSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionRule(label: "ACTIVITY") {
+                HStack(spacing: OrbitSpacing.md) {
+                    Text("\(groupedMemberInteractions.count)")
+                        .font(OrbitTypography.footnote)
+                        .foregroundStyle(.quaternary)
+                    Button("Log for everyone") { router.log(group: constellation) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
             }
-            .padding(.horizontal, OrbitSpacing.lg)
 
             if groupedMemberInteractions.isEmpty {
-                ContentUnavailableView {
-                    Label("No Activity", systemImage: "bubble.left.and.exclamationmark.bubble.right")
-                } description: {
-                    Text("Log a group interaction to see it appear here and on every member's timeline.")
-                } actions: {
-                    Button("Log Interaction") {
-                        showAddInteraction = true
+                Text("No group activity logged. Logged events appear here and on every member's timeline.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, OrbitSpacing.md)
+            } else {
+                VStack(alignment: .leading, spacing: OrbitSpacing.lg) {
+                    ForEach(groupedByMonth, id: \.key) { month in
+                        monthGroup(month)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
                 .padding(.top, OrbitSpacing.md)
-            } else {
+            }
+        }
+    }
+
+    private func monthGroup(_ month: (key: String, groups: [InteractionGroup])) -> some View {
+        let isCollapsed = collapsedMonths.contains(month.key)
+
+        return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if isCollapsed { collapsedMonths.remove(month.key) }
+                    else { collapsedMonths.insert(month.key) }
+                }
+            } label: {
+                HStack(spacing: OrbitSpacing.sm) {
+                    Text(month.key)
+                        .font(OrbitTypography.footnote)
+                        .textCase(.uppercase)
+                        .tracking(1.5)
+                        .foregroundStyle(.tertiary)
+                    if isCollapsed {
+                        Text("(\(month.groups.count))")
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.quaternary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !isCollapsed {
                 VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                    ForEach(groupedMemberInteractions) { group in
-                        InteractionRowContent(
-                            group: group,
-                            showContactNames: true,
-                            showChevron: false
-                        )
-                        .padding(OrbitSpacing.sm)
-                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                        .padding(.horizontal, OrbitSpacing.lg)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            editingInteraction = group.representative
-                        }
+                    ForEach(month.groups) { group in
+                        timelineRow(group)
                     }
                 }
             }
         }
-        .padding(.top, OrbitSpacing.md)
-        .padding(.bottom, OrbitSpacing.xxxl)
+    }
+
+    private func timelineRow(_ group: InteractionGroup) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
+            Text(group.date.formatted(.dateTime.day().month(.abbreviated)))
+                .font(OrbitTypography.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: dateGutterWidth, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
+                Text(group.impulse)
+                    .font(OrbitTypography.bodyMedium)
+
+                Text(participantLine(for: group))
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+
+                if !group.content.isEmpty {
+                    Text(group.content)
+                        .font(OrbitTypography.body)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(2)
+                }
+
+                if !group.tagNames.isEmpty {
+                    Text(group.tagList.map { "#\($0)" }.joined(separator: " "))
+                        .font(OrbitTypography.footnote)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { router.edit(group.representative) }
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { router.edit(group.representative) }
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                store.delete(group.representative, includeBatch: true)
+            }
+        }
+    }
+
+    /// "everyone" when the event covers every active member; otherwise
+    /// names up to four, then "+N more".
+    private func participantLine(for group: InteractionGroup) -> String {
+        let participants = group.contacts
+        let memberIDs = Set(activeMembers.map(\.id))
+        let participantIDs = Set(participants.map(\.id))
+
+        if participants.count > 1 && participantIDs == memberIDs {
+            return "with everyone"
+        }
+        let names = participants.map(\.name)
+        if names.count <= 4 {
+            return "with \(names.joined(separator: ", "))"
+        }
+        let shown = names.prefix(4).joined(separator: ", ")
+        return "with \(shown) +\(names.count - 4) more"
+    }
+
+    // MARK: - Section Rule
+
+    private func sectionRule<Trailing: View>(label: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            Divider()
+            HStack {
+                Text(label)
+                    .font(OrbitTypography.captionMedium)
+                    .tracking(2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                trailing()
+            }
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button("Add Members", systemImage: "person.badge.plus") {
+                showAddMembers = true
+            }
+            Button("Log for everyone", systemImage: "plus.bubble") {
+                router.log(group: constellation)
+            }
+            Menu {
+                Button("Select Members", systemImage: "checkmark.circle") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isSelecting = true
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
     }
 }
 
 // MARK: - Add Members Sheet
 
 struct AddMembersSheet: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     @Bindable var constellation: Constellation
@@ -531,7 +483,7 @@ struct AddMembersSheet: View {
         let available = allContacts.filter { !memberIDs.contains($0.id) }
         if searchText.isEmpty { return available }
         let query = searchText.lowercased()
-        return available.filter { $0.searchableName.contains(query) }
+        return available.filter { $0.matchesSearch(query) }
     }
 
     var body: some View {
@@ -541,7 +493,7 @@ struct AddMembersSheet: View {
                     ContentUnavailableView(
                         "Everyone's Here",
                         systemImage: "person.2.fill",
-                        description: Text("All your active contacts are already in this constellation.")
+                        description: Text("All your active contacts are already in this group.")
                     )
                 } else {
                     List {
@@ -643,15 +595,6 @@ struct AddMembersSheet: View {
 
     private func addSelectedMembers() {
         let contactsToAdd = allContacts.filter { selectedIDs.contains($0.id) }
-        for contact in contactsToAdd {
-            if !(constellation.contacts?.contains(where: { $0.id == contact.id }) ?? false) {
-                if constellation.contacts == nil {
-                    constellation.contacts = []
-                }
-                constellation.contacts?.append(contact)
-                contact.modifiedAt = Date()
-            }
-        }
-        try? modelContext.save()
+        store.addToGroup(contactsToAdd, group: constellation)
     }
 }

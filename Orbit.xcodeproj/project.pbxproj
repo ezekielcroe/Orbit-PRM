@@ -12,11 +12,22 @@
 		FE7089252F53F6F400274913 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		FE9D1E18309896A800ABBAE2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FE4FCF772F4695DF006AF61B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FE4FCF7E2F4695DF006AF61B;
+			remoteInfo = Orbit;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		FE4FCF7F2F4695DF006AF61B /* Orbit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Orbit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE4FCFEC2F469807006AF61B /* CoreSpotlight.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreSpotlight.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.2.sdk/System/Library/Frameworks/CoreSpotlight.framework; sourceTree = DEVELOPER_DIR; };
 		FE7089242F53F6F400274913 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		FE9D1E14309896A800ABBAE2 /* OrbitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OrbitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -27,6 +38,28 @@
 			);
 			target = FE4FCF7E2F4695DF006AF61B /* Orbit */;
 		};
+		FE9D1E22309896B900ABBAE2 /* Exceptions for "Tests" folder in "Orbit" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				OrbitCoreTests/CaptureParserTests.swift,
+				OrbitCoreTests/CommandParserTests.swift,
+				OrbitCoreTests/DatePhraseParserTests.swift,
+				OrbitCoreTests/EngineTests.swift,
+				OrbitCoreTests/TestSupport.swift,
+			);
+			target = FE4FCF7E2F4695DF006AF61B /* Orbit */;
+		};
+		FE9D1E23309896B900ABBAE2 /* Exceptions for "Tests" folder in "OrbitTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				OrbitCoreTests/CaptureParserTests.swift,
+				OrbitCoreTests/CommandParserTests.swift,
+				OrbitCoreTests/DatePhraseParserTests.swift,
+				OrbitCoreTests/EngineTests.swift,
+				OrbitCoreTests/TestSupport.swift,
+			);
+			target = FE9D1E13309896A800ABBAE2 /* OrbitTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -36,6 +69,15 @@
 				FE4FCFB42F4696D1006AF61B /* Exceptions for "Orbit" folder in "Orbit" target */,
 			);
 			path = Orbit;
+			sourceTree = "<group>";
+		};
+		FE9D1DFF3098967900ABBAE2 /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FE9D1E22309896B900ABBAE2 /* Exceptions for "Tests" folder in "Orbit" target */,
+				FE9D1E23309896B900ABBAE2 /* Exceptions for "Tests" folder in "OrbitTests" target */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +91,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE9D1E11309896A800ABBAE2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -59,6 +108,7 @@
 				FE24F5792F51B8EA00EE5404 /* LaunchScreen.storyboard */,
 				FE4FCF812F4695DF006AF61B /* Orbit */,
 				FE4FCFEB2F469807006AF61B /* Frameworks */,
+				FE9D1DFF3098967900ABBAE2 /* Tests */,
 				FE4FCF802F4695DF006AF61B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -67,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				FE4FCF7F2F4695DF006AF61B /* Orbit.app */,
+				FE9D1E14309896A800ABBAE2 /* OrbitTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -96,6 +147,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				FE4FCF812F4695DF006AF61B /* Orbit */,
+				FE9D1DFF3098967900ABBAE2 /* Tests */,
 			);
 			name = Orbit;
 			packageProductDependencies = (
@@ -104,6 +156,26 @@
 			productReference = FE4FCF7F2F4695DF006AF61B /* Orbit.app */;
 			productType = "com.apple.product-type.application";
 		};
+		FE9D1E13309896A800ABBAE2 /* OrbitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FE9D1E1A309896A800ABBAE2 /* Build configuration list for PBXNativeTarget "OrbitTests" */;
+			buildPhases = (
+				FE9D1E10309896A800ABBAE2 /* Sources */,
+				FE9D1E11309896A800ABBAE2 /* Frameworks */,
+				FE9D1E12309896A800ABBAE2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FE9D1E19309896A800ABBAE2 /* PBXTargetDependency */,
+			);
+			name = OrbitTests;
+			packageProductDependencies = (
+			);
+			productName = OrbitTests;
+			productReference = FE9D1E14309896A800ABBAE2 /* OrbitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -111,11 +183,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
+				LastSwiftUpdateCheck = 2720;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					FE4FCF7E2F4695DF006AF61B = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					FE9D1E13309896A800ABBAE2 = {
+						CreatedOnToolsVersion = 27.2;
+						TestTargetID = FE4FCF7E2F4695DF006AF61B;
 					};
 				};
 			};
@@ -134,6 +210,7 @@
 			projectRoot = "";
 			targets = (
 				FE4FCF7E2F4695DF006AF61B /* Orbit */,
+				FE9D1E13309896A800ABBAE2 /* OrbitTests */,
 			);
 		};
 /* End PBXProject section */
@@ -148,6 +225,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE9D1E12309896A800ABBAE2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -158,7 +242,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE9D1E10309896A800ABBAE2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FE9D1E19309896A800ABBAE2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FE4FCF7E2F4695DF006AF61B /* Orbit */;
+			targetProxy = FE9D1E18309896A800ABBAE2 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		FE4FCF882F4695E0006AF61B /* Debug */ = {
@@ -405,6 +504,50 @@
 			};
 			name = Release;
 		};
+		FE9D1E1B309896A800ABBAE2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Y77PNP57U;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = GeekyZeke.OrbitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Orbit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Orbit";
+			};
+			name = Debug;
+		};
+		FE9D1E1C309896A800ABBAE2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9Y77PNP57U;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = GeekyZeke.OrbitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Orbit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Orbit";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -422,6 +565,15 @@
 			buildConfigurations = (
 				FE4FCF8B2F4695E0006AF61B /* Debug */,
 				FE4FCF8C2F4695E0006AF61B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FE9D1E1A309896A800ABBAE2 /* Build configuration list for PBXNativeTarget "OrbitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FE9D1E1B309896A800ABBAE2 /* Debug */,
+				FE9D1E1C309896A800ABBAE2 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

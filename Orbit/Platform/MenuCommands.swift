@@ -1,9 +1,8 @@
 import SwiftUI
 
 // MARK: - OrbitCommands
-// Simplified menu bar commands reflecting the merged navigation.
-// ⌘1 goes to People (the single primary view).
-// ⌘K opens the command palette.
+// Every item here is handled by ContentView (previously ⌘N and ⌘1 posted
+// notifications nothing listened for).
 
 struct OrbitCommands: Commands {
 
@@ -14,25 +13,32 @@ struct OrbitCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: .command)
 
-            Button("Command Palette") {
+            Button("Log or Find…") {
                 NotificationCenter.default.post(name: .commandPaletteRequested, object: nil)
             }
             .keyboardShortcut("k", modifiers: .command)
+        }
 
-            Divider()
-
-            Button("Quick Log") {
-                NotificationCenter.default.post(name: .commandPaletteRequested, object: nil)
+        CommandGroup(after: .undoRedo) {
+            Button("Undo Last Change") {
+                NotificationCenter.default.post(name: .undoRequested, object: nil)
             }
-            .keyboardShortcut("l", modifiers: [.command, .shift])
+            .keyboardShortcut("z", modifiers: [.command, .option])
         }
 
         CommandMenu("Navigate") {
-            Button("People") {
-                NotificationCenter.default.post(name: .showDashboardRequested, object: nil)
-            }
-            .keyboardShortcut("1", modifiers: .command)
+            navButton("Today", .today, "1")
+            navButton("People", .people, "2")
+            navButton("Groups", .groups, "3")
+            navButton("Activity", .activity, "4")
         }
+    }
+
+    private func navButton(_ title: String, _ tab: AppRouter.Tab, _ key: KeyEquivalent) -> some View {
+        Button(title) {
+            NotificationCenter.default.post(name: .navigateRequested, object: tab)
+        }
+        .keyboardShortcut(key, modifiers: .command)
     }
 }
 
@@ -41,6 +47,6 @@ struct OrbitCommands: Commands {
 extension Notification.Name {
     static let newContactRequested = Notification.Name("orbit.newContact")
     static let commandPaletteRequested = Notification.Name("orbit.commandPalette")
-    static let showDashboardRequested = Notification.Name("orbit.showDashboard")
-    static let showContactsRequested = Notification.Name("orbit.showContacts")
+    static let undoRequested = Notification.Name("orbit.undo")
+    static let navigateRequested = Notification.Name("orbit.navigate")
 }

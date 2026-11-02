@@ -3,249 +3,228 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Environment(CommandExecutor.self) private var executor
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
+    @Environment(\.scenePhase) private var scenePhase
 
     @Binding var spotlightContactID: UUID?
 
-    // 1. ADD: interactions to NavTab
-    enum NavTab: Hashable {
-        case people
-        case constellations
-        case interactions
-        case settings
-    }
-    
-    @State private var selectedTab: NavTab = .people
-    @State private var selectedContact: Contact?
-    @State private var selectedConstellation: Constellation?
-    
-    @State private var showCommandPalette = false
-    @State private var showSettings = false
-    
-    @Query(sort: \Constellation.name) private var constellations: [Constellation]
+    @AppStorage("orbit.onboarded") private var onboarded = false
+    @AppStorage("orbit.notifications.enabled") private var notificationsEnabled = false
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
     var body: some View {
+        @Bindable var router = router
+
         Group {
             #if os(macOS)
-            threeColumnMacLayout
+            splitLayout
             #else
             if horizontalSizeClass == .compact {
-                mobileTabLayout
+                tabLayout
             } else {
-                threeColumnMacLayout
+                splitLayout
             }
             #endif
         }
-        // 1. Present the Command Palette directly here
-        .sheet(isPresented: $showCommandPalette) {
-            CommandPaletteView(
-                isPresented: $showCommandPalette,
-                onNavigateToContact: { contact in
-                    // Direct navigation control!
-                    selectedTab = .people
-                    selectedContact = contact
-                },
-                onNavigateToConstellation: { constellation in
-                    selectedTab = .constellations
-                    selectedConstellation = constellation
-                }
-            )
-            .presentationDetents([.medium, .large])
-            #if os(iOS)
-            .presentationDragIndicator(.visible)
-            #endif
+        .overlay(alignment: .bottom) {
+            if let toast = store.toast {
+                ToastView(toast: toast)
+                    .padding(.bottom, OrbitSpacing.xl + OrbitSpacing.md)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .id(toast.id)
+            }
         }
-        // 2. Listen for the keyboard shortcut
-        .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in
-            showCommandPalette = true
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: store.toast?.id)
+        .sheet(isPresented: $router.showPalette) {
+            CommandPaletteView(seed: router.paletteSeed)
+                .presentationDetents([.large])
         }
-        // 3. FIX: Handle Apple Spotlight deep links
+        .sheet(item: $router.composer) { request in
+            LogComposer(mode: request.mode)
+        }
+        .sheet(isPresented: $router.showNewContact) {
+            ContactFormSheet(mode: .add) { router.open($0) }
+        }
+        .sheet(isPresented: $router.showOnboarding) {
+            OnboardingView()
+        }
+        .sheet(isPresented: $router.showClosenessReview) {
+            ClosenessReviewSheet()
+        }
+        // Menu bar commands (macOS) and keyboard shortcuts (iPad).
+        .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in router.openPalette() }
+        .onReceive(NotificationCenter.default.publisher(for: .newContactRequested)) { _ in router.showNewContact = true }
+        .onReceive(NotificationCenter.default.publisher(for: .undoRequested)) { _ in store.undo() }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateRequested)) { note in
+            if let tab = note.object as? AppRouter.Tab { router.tab = tab }
+        }
+        .task {
+            store.runV2MaintenanceIfNeeded()
+            MomentumEngine.recomputeAll(in: modelContext)
+            if !onboarded && store.activeContacts(includeArchived: true).isEmpty {
+                router.showOnboarding = true
+            }
+            await rescheduleNotifications()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                MomentumEngine.recomputeAll(in: modelContext)
+                Task { await rescheduleNotifications() }
+            }
+        }
         .onChange(of: spotlightContactID) { _, newID in
-            if let id = newID {
-                let descriptor = FetchDescriptor<Contact>(predicate: #Predicate { $0.id == id })
-                if let match = try? modelContext.fetch(descriptor).first {
-                    selectedTab = .people
-                    selectedContact = match
-                }
-                spotlightContactID = nil // Reset after consuming
+            guard let id = newID else { return }
+            let descriptor = FetchDescriptor<Contact>(predicate: #Predicate { $0.id == id })
+            if let match = try? modelContext.fetch(descriptor).first {
+                router.open(match)
             }
+            spotlightContactID = nil
         }
     }
 
-    // MARK: - macOS & iPadOS Layout (3-Column)
-    private var threeColumnMacLayout: some View {
-        NavigationSplitView {
-            // 1. Sidebar Column
-            List(selection: Binding<NavTab?>(
-                get: { selectedTab },
-                set: { if let newTab = $0 { selectedTab = newTab } }
+    private func rescheduleNotifications() async {
+        guard notificationsEnabled else { return }
+        await NotificationScheduler.shared.reschedule(using: store)
+    }
+
+    // MARK: - Split layout (macOS, iPad)
+
+    private var splitLayout: some View {
+        @Bindable var router = router
+        return NavigationSplitView {
+            List(selection: Binding<AppRouter.Tab?>(
+                get: { router.tab },
+                set: { if let tab = $0 { router.tab = tab } }
             )) {
-                Section("Library") {
-                    NavigationLink(value: NavTab.people) {
-                        Label("People", systemImage: "person.2")
-                    }
-                    NavigationLink(value: NavTab.constellations) {
-                        Label("Constellations", systemImage: "star")
-                    }
-                    NavigationLink(value: NavTab.interactions) {
-                        Label("Activity", systemImage: "text.bubble")
-                    }
+                Section {
+                    NavigationLink(value: AppRouter.Tab.today) { Label("Today", systemImage: "sun.max") }
+                    NavigationLink(value: AppRouter.Tab.people) { Label("People", systemImage: "person.2") }
+                    NavigationLink(value: AppRouter.Tab.groups) { Label("Groups", systemImage: "star") }
+                    NavigationLink(value: AppRouter.Tab.activity) { Label("Activity", systemImage: "text.bubble") }
                 }
-                
-                Section("Preferences") {
-                    NavigationLink(value: NavTab.settings) {
-                        Label("Settings", systemImage: "gearshape")
-                    }
+                #if os(iOS)
+                // macOS uses the standard Settings window (⌘,).
+                Section {
+                    NavigationLink(value: AppRouter.Tab.settings) { Label("Settings", systemImage: "gearshape") }
                 }
+                #endif
             }
-            .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 250)
+            .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 250)
             .navigationTitle("Orbit")
-            
         } content: {
-            // 2. Middle Content Column
-            switch selectedTab {
+            switch router.tab {
+            case .today:
+                TodayView(selectedContact: $router.todaySelection)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 360)
             case .people:
-                PeopleView(
-                    selectedContact: $selectedContact,
-                    showCommandPalette: $showCommandPalette,
-                    showSettings: .constant(false)
-                )
-                .navigationSplitViewColumnWidth(min: 250, ideal: 300)
-                
-            case .constellations:
-                ConstellationListView(selectedConstellation: $selectedConstellation)
+                PeopleView(selectedContact: $router.peopleSelection)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 340)
+            case .groups:
+                ConstellationListView(selectedConstellation: $router.groupSelection)
                     .navigationSplitViewColumnWidth(min: 250, ideal: 300)
-                
-            // 3. ADD: Interactions Middle Column
-            case .interactions:
-                InteractionsView(selectedContact: $selectedContact)
-                    .navigationSplitViewColumnWidth(min: 250, ideal: 350) // Slightly wider for log reading
-                
+            case .activity:
+                InteractionsView(selectedContact: $router.activitySelection)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 360)
             case .settings:
                 SettingsView()
             }
-            
         } detail: {
-            // 3. Detail Column
-            switch selectedTab {
-            case .people, .interactions: // 4. ADD: .interactions shares People's detail view (the contact)
-                if let contact = selectedContact {
-                    ContactDetailView(contact: contact)
-                } else {
-                    ContentUnavailableView(
-                        selectedTab == .people ? "Select a Contact" : "Select an Interaction",
-                        systemImage: selectedTab == .people ? "person.crop.circle" : "text.bubble",
-                        description: Text(selectedTab == .people ? "Choose someone from the list to view their details." : "Choose an interaction to view the contact's details.")
-                    )
-                }
-                
-            case .constellations:
-                if let constellation = selectedConstellation {
-                    NavigationStack {
-                        ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
+            NavigationStack {
+                switch router.tab {
+                case .today:
+                    contactDetail(router.todaySelection, empty: "Pick someone from Today")
+                case .people:
+                    contactDetail(router.peopleSelection, empty: "Choose someone from the list")
+                case .activity:
+                    contactDetail(router.activitySelection, empty: "Choose a log to see the person")
+                case .groups:
+                    if let group = router.groupSelection {
+                        ConstellationDetailView(constellation: group, selectedContact: $router.groupMemberSelection)
+                            .navigationDestination(item: $router.groupMemberSelection) { ContactDetailView(contact: $0) }
+                    } else {
+                        ContentUnavailableView("Select a group", systemImage: "star")
                     }
-                } else {
-                    ContentUnavailableView("Select a Constellation", systemImage: "star")
+                case .settings:
+                    ContentUnavailableView("Settings", systemImage: "gearshape")
                 }
-                
-            case .settings:
-                ContentUnavailableView("Settings", systemImage: "gear", description: Text("Manage your Orbit preferences."))
             }
         }
         .toolbar {
-            ToolbarItem {
-                Button(action: { showCommandPalette = true }) {
-                    Label("Command Palette", systemImage: "command")
+            ToolbarItem(placement: .primaryAction) {
+                Button { router.openPalette() } label: {
+                    Label("Log or find", systemImage: "square.and.pencil")
                 }
+                .help("Log or find (⌘K)")
             }
         }
     }
 
-    // MARK: - iOS Layout (Tab Bar)
-    private var mobileTabLayout: some View {
-        TabView(selection: $selectedTab) {
-            
-            // People Tab
+    @ViewBuilder
+    private func contactDetail(_ contact: Contact?, empty: String) -> some View {
+        if let contact {
+            ContactDetailView(contact: contact)
+        } else {
+            ContentUnavailableView(empty, systemImage: "person.crop.circle")
+        }
+    }
+
+    // MARK: - Tab layout (iPhone)
+    // Each tab has its own selection, so opening someone in Today no longer
+    // pushes them onto the People and Activity stacks too.
+
+    private var tabLayout: some View {
+        @Bindable var router = router
+        return TabView(selection: $router.tab) {
             NavigationStack {
-                PeopleView(
-                    selectedContact: $selectedContact,
-                    showCommandPalette: $showCommandPalette,
-                    showSettings: $showSettings
-                )
-                .navigationDestination(item: $selectedContact) { contact in
-                    ContactDetailView(contact: contact)
-                }
+                TodayView(selectedContact: $router.todaySelection)
+                    .navigationDestination(item: $router.todaySelection) { ContactDetailView(contact: $0) }
+                    .toolbar { logButton }
+            }
+            .tabItem { Label("Today", systemImage: "sun.max") }
+            .tag(AppRouter.Tab.today)
+
+            NavigationStack {
+                PeopleView(selectedContact: $router.peopleSelection)
+                    .navigationDestination(item: $router.peopleSelection) { ContactDetailView(contact: $0) }
             }
             .tabItem { Label("People", systemImage: "person.2") }
-            .tag(NavTab.people)
+            .tag(AppRouter.Tab.people)
 
-            // Constellations Tab
             NavigationStack {
-                ConstellationListView(selectedConstellation: $selectedConstellation)
-                    .navigationDestination(item: $selectedConstellation) { constellation in
-                        ConstellationDetailView(constellation: constellation, selectedContact: $selectedContact)
+                ConstellationListView(selectedConstellation: $router.groupSelection)
+                    .navigationDestination(item: $router.groupSelection) { group in
+                        ConstellationDetailView(constellation: group, selectedContact: $router.groupMemberSelection)
                     }
+                    .navigationDestination(item: $router.groupMemberSelection) { ContactDetailView(contact: $0) }
             }
-            .tabItem { Label("Constellations", systemImage: "star") }
-            .tag(NavTab.constellations)
+            .tabItem { Label("Groups", systemImage: "star") }
+            .tag(AppRouter.Tab.groups)
 
-            // 5. ADD: Interactions Tab
             NavigationStack {
-                InteractionsView(selectedContact: $selectedContact)
-                    .navigationDestination(item: $selectedContact) { contact in
-                        ContactDetailView(contact: contact)
-                    }
+                InteractionsView(selectedContact: $router.activitySelection)
+                    .navigationDestination(item: $router.activitySelection) { ContactDetailView(contact: $0) }
             }
             .tabItem { Label("Activity", systemImage: "text.bubble") }
-            .tag(NavTab.interactions)
+            .tag(AppRouter.Tab.activity)
 
-            // Settings Tab
             NavigationStack {
                 SettingsView()
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
-            .tag(NavTab.settings)
+            .tag(AppRouter.Tab.settings)
         }
     }
-}
 
-// MARK: - Logic Attachment Extension
-extension View {
-    func attachCommonLogic(showCommandPalette: Binding<Bool>, spotlightContactID: Binding<UUID?>) -> some View {
-        self.modifier(NavigationLogicModifier(showCommandPalette: showCommandPalette, spotlightContactID: spotlightContactID))
-    }
-}
-
-struct NavigationLogicModifier: ViewModifier {
-    @Binding var showCommandPalette: Bool
-    @Binding var spotlightContactID: UUID?
-    
-    @Environment(\.modelContext) private var modelContext
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
-
-    func body(content: Content) -> some View {
-        content
-            .sheet(isPresented: $showCommandPalette) {
-                CommandPaletteView(
-                    isPresented: $showCommandPalette,
-                    onNavigateToContact: { contact in
-                        // Deep link logic for command palette
-                        spotlightContactID = contact.id
-                    }
-                )
-                .presentationDetents([.medium, .large])
-                #if os(iOS)
-                .presentationDragIndicator(.visible)
-                #endif
+    @ToolbarContentBuilder
+    private var logButton: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button { router.openPalette() } label: {
+                Label("Log or find", systemImage: "square.and.pencil")
             }
-            // Listen for global menu bar commands
-            .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in
-                showCommandPalette = true
-            }
+        }
     }
 }

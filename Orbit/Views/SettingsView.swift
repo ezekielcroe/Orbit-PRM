@@ -7,6 +7,7 @@ import Contacts
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
     @Environment(DataValidator.self) private var validator
     @Environment(SpotlightIndexer.self) private var spotlightIndexer
 
@@ -59,6 +60,7 @@ struct SettingsView: View {
     @State private var showClearSampleDataConfirmation = false
     @AppStorage("hasSampleData") private var hasSampleData = false
     @AppStorage("hasSeenTutorial") private var hasSeenTutorial = false
+    @AppStorage("orbit.notifications.enabled") private var notificationsEnabled = false
 
     // Maintenance
     @State private var showIntegrityResults = false
@@ -79,6 +81,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 gettingStartedSection
+                remindersSection
                 statsSection
                 tagSection
                 exportSection
@@ -116,7 +119,7 @@ struct SettingsView: View {
                 deleteAllData()
             }
         } message: {
-            Text("This will permanently delete all contacts, interactions, artifacts, tags, and constellations. This cannot be undone.")
+            Text("This will permanently delete all contacts, logs, facts, tags, and groups. This cannot be undone.")
         }
         // Sample data confirmation
         .confirmationDialog("Load Sample Data?", isPresented: $showSampleDataConfirmation) {
@@ -124,7 +127,7 @@ struct SettingsView: View {
                 loadSampleData()
             }
         } message: {
-            Text("This will add 8 sample contacts with interactions, artifacts, and constellations so you can explore every feature. You can clear it later from Settings.")
+            Text("This will add 8 sample contacts with logs, facts, and groups so you can explore every feature. You can clear it later from Settings.")
         }
         // Clear sample data confirmation
         .confirmationDialog("Clear Sample Data?", isPresented: $showClearSampleDataConfirmation) {
@@ -212,8 +215,8 @@ struct SettingsView: View {
             } label: {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("How to Use Orbit")
-                        Text("Learn the command palette syntax and features")
+                        Text("How Orbit works")
+                        Text("Today, logging in plain words, closeness and shortcuts")
                             .font(OrbitTypography.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -259,8 +262,41 @@ struct SettingsView: View {
             Text("Getting Started")
         } footer: {
             if !hasSeenTutorial {
-                Text("New to Orbit? Start with the tutorial to learn how the command palette works.")
+                Text("New to Orbit? A one-page guide to how it works.")
             }
+        }
+    }
+
+    // MARK: - Reminders Section
+
+    private var remindersSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { notificationsEnabled },
+                set: { newValue in
+                    if newValue {
+                        Task {
+                            let granted = await NotificationScheduler.shared.requestAuthorization()
+                            notificationsEnabled = granted
+                            if granted { await NotificationScheduler.shared.reschedule(using: store) }
+                        }
+                    } else {
+                        notificationsEnabled = false
+                        NotificationScheduler.shared.disable()
+                    }
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Weekly reminder and birthdays")
+                    Text("Sunday evening digest of who could use a hello, and a morning heads-up on birthdays and anniversaries.")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Reminders")
+        } footer: {
+            Text("Reminders are scheduled on this device only. If nothing arrives, check that notifications are allowed for Orbit in system settings.")
         }
     }
 
@@ -270,9 +306,9 @@ struct SettingsView: View {
         Section {
             StatRow(label: "Contacts", value: "\(stats.contactCount)")
             StatRow(label: "Interactions", value: "\(stats.interactionCount)")
-            StatRow(label: "Artifacts", value: "\(stats.artifactCount)")
+            StatRow(label: "Facts", value: "\(stats.artifactCount)")
             StatRow(label: "Tags", value: "\(stats.tagCount)")
-            StatRow(label: "Constellations", value: "\(stats.constellationCount)")
+            StatRow(label: "Groups", value: "\(stats.constellationCount)")
             if stats.archivedCount > 0 {
                 StatRow(label: "Archived", value: "\(stats.archivedCount)")
             }
@@ -527,7 +563,7 @@ struct SettingsView: View {
     private func runIntegrityCheck() {
         let issues = validator.integrityCheck(in: modelContext)
         if issues.isEmpty {
-            integrityResultMessage = "Your database is perfectly healthy. No orphaned artifacts or sync issues found."
+            integrityResultMessage = "Your database is perfectly healthy. No orphaned facts or sync issues found."
         } else {
             integrityResultMessage = "Doctor repaired \(issues.count) issues (orphaned records removed, sync dates corrected)."
         }
@@ -560,6 +596,7 @@ struct SettingsView: View {
             modelContext.delete(interaction)
         }
         PersistenceHelper.saveWithLogging(modelContext, operation: "purge deleted interactions")
+        store.clearUndoHistory()
         importResultMessage = "Purged \(count) deleted interaction\(count == 1 ? "" : "s") permanently."
         showImportResults = true
         fetchStats()
@@ -572,6 +609,7 @@ struct SettingsView: View {
         try? modelContext.delete(model: Tag.self)
         try? modelContext.delete(model: Constellation.self)
         PersistenceHelper.saveWithLogging(modelContext, operation: "erase all data")
+        store.clearUndoHistory()
         spotlightIndexer.deleteAll()
         importResultMessage = "All data has been erased."
         showImportResults = true
@@ -692,6 +730,7 @@ struct SettingsView: View {
 
             // FIX P0-1.1: Initialize cached fields for new contacts
             newContact.refreshCachedFields()
+            newContact.refreshArtifactCache()
 
             importedCount += 1
         }
@@ -739,7 +778,7 @@ struct SettingsView: View {
                     sum + ((dict["artifacts"] as? [[String: Any]])?.count ?? 0)
                 }
 
-                jsonImportPreviewMessage = "This backup contains \(contactCount) contacts, \(interactionCount) interactions, and \(artifactCount) artifacts.\n\nYou can merge into your existing data or replace everything."
+                jsonImportPreviewMessage = "This backup contains \(contactCount) contacts, \(interactionCount) logs, and \(artifactCount) facts.\n\nYou can merge into your existing data or replace everything."
 
                 // Save the URL for the actual import (need to re-read because security scope)
                 // Store the data instead since the URL scope will expire
@@ -824,6 +863,12 @@ struct SettingsView: View {
 
                         let contact = Contact(name: name, notes: notes, targetOrbit: targetOrbit)
                         contact.isArchived = isArchived
+                        // V2 fields; older backups without them treat the
+                        // closeness as confirmed when the orbit isn't the default.
+                        contact.closenessConfirmed = contactDict["closenessConfirmed"] as? Bool ?? (targetOrbit != 2)
+                        if let snoozed = contactDict["snoozedUntil"] as? String {
+                            contact.snoozedUntil = ISO8601DateFormatter().date(from: snoozed)
+                        }
 
                         // Restore dates if available
                         if let createdTs = contactDict["createdAt"] as? TimeInterval {
@@ -899,6 +944,7 @@ struct SettingsView: View {
 
                         // Refresh cached fields
                         contact.refreshCachedFields()
+                        contact.refreshArtifactCache()
                         importedContacts += 1
                     }
 
@@ -910,7 +956,7 @@ struct SettingsView: View {
 
                     self.isImportingJSON = false
                     self.pendingImportData = nil
-                    self.importResultMessage = "Imported \(importedContacts) contacts, \(importedInteractions) interactions, and \(importedArtifacts) artifacts."
+                    self.importResultMessage = "Imported \(importedContacts) contacts, \(importedInteractions) logs, and \(importedArtifacts) facts."
                     self.showImportResults = true
                     self.fetchStats()
                 }
@@ -933,6 +979,7 @@ struct SettingsView: View {
         try? modelContext.delete(model: Tag.self)
         try? modelContext.delete(model: Constellation.self)
         PersistenceHelper.saveWithLogging(modelContext, operation: "clear before import")
+        store.clearUndoHistory()
         spotlightIndexer.deleteAll()
     }
 

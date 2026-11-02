@@ -7,7 +7,7 @@ import SwiftData
 struct ContactFormSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
+    @Environment(OrbitStore.self) private var store
     @Environment(DataValidator.self) private var validator
 
     let mode: Mode
@@ -87,14 +87,14 @@ struct ContactFormSheet: View {
                     }
                 }
         } footer: {
-            Text("The only required field. Everything else can be added later via artifacts.")
+            Text("The only required field. Facts, groups and notes can be added any time.")
                 .font(OrbitTypography.footnote)
         }
     }
 
     private var orbitSection: some View {
-        Section("Orbit Zone") {
-            Picker("Target Orbit", selection: $targetOrbit) {
+        Section("Closeness") {
+            Picker("How close", selection: $targetOrbit) {
                 ForEach(OrbitZone.allZones, id: \.id) { zone in
                     Text(zone.name).tag(zone.id)
                 }
@@ -117,7 +117,7 @@ struct ContactFormSheet: View {
             }
             .padding(.vertical, OrbitSpacing.xs)
 
-            Text("Expected cadence: \(cadenceDescription(for: targetOrbit))")
+            Text("Orbit will suggest getting in touch: \(cadenceDescription(for: targetOrbit).lowercased())")
                 .font(OrbitTypography.footnote)
                 .foregroundStyle(.tertiary)
         }
@@ -172,35 +172,25 @@ struct ContactFormSheet: View {
 
     private func cadenceDescription(for orbit: Int) -> String {
         switch orbit {
-        case 0: return "Weekly contact"
-        case 1: return "Monthly contact"
-        case 2: return "Quarterly contact"
-        case 3: return "Yearly contact"
-        case 4: return "No expected cadence"
-        default: return "Quarterly contact"
+        case 0: return "Weekly"
+        case 1: return "Monthly"
+        case 2: return "Every few months"
+        case 3: return "Yearly"
+        case 4: return "Never — no reminders"
+        default: return "Every few months"
         }
     }
 
     private func save() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-
         switch mode {
         case .add:
-            let contact = Contact(name: trimmedName, notes: notes, targetOrbit: targetOrbit)
-            modelContext.insert(contact)
-            spotlightIndexer.index(contact: contact)
+            // Choosing a closeness in the form counts as confirming it.
+            let contact = store.createContact(name: trimmedName, orbit: targetOrbit, notes: notes, closenessConfirmed: true)
             onSave?(contact)
-
         case .edit(let contact):
-            contact.name = trimmedName
-            contact.updateSearchableName()
-            contact.notes = notes
-            contact.targetOrbit = targetOrbit
-            contact.modifiedAt = Date()
-            spotlightIndexer.index(contact: contact)
+            store.updateContact(contact, name: trimmedName, notes: notes, orbit: targetOrbit)
             onSave?(contact)
         }
-
-        try? modelContext.save()
     }
 }

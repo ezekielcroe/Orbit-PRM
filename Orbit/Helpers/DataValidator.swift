@@ -103,7 +103,7 @@ final class DataValidator {
 
         if key.trimmingCharacters(in: .whitespaces).isEmpty {
             issues.append(ValidationIssue(
-                message: "Artifact key cannot be empty.",
+                message: "A fact needs a name.",
                 severity: .error,
                 suggestion: nil
             ))
@@ -198,7 +198,7 @@ final class DataValidator {
             let orphaned = artifacts.filter { $0.contact == nil }
             if !orphaned.isEmpty {
                 issues.append(ValidationIssue(
-                    message: "\(orphaned.count) artifact(s) with no associated contact found.",
+                    message: "\(orphaned.count) fact(s) with no associated contact found.",
                     severity: .warning,
                     suggestion: "These may be remnants of deleted contacts."
                 ))

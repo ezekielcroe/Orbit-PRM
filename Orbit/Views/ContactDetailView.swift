@@ -2,427 +2,414 @@ import SwiftUI
 import SwiftData
 
 // MARK: - ContactDetailView
-// Overhauled to use a "Facet" pattern (Profile vs. Activity) to prevent
-// infinite scrolling on heavy contacts. Features a polished monogram header.
+// One page per person: name → plain-language status → visible actions →
+// notes → facts → timeline. The actions people use most (log, add a fact,
+// change closeness) are real buttons, not hidden in a long-press. Rows are
+// tappable to edit and swipeable to delete, and every change can be undone.
 
 struct ContactDetailView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Bindable var contact: Contact
 
-    // Navigation / Facet State
-    enum DetailTab { case profile, activity }
-    @State private var selectedTab: DetailTab = .profile
-
-    // Sheet State
     @State private var showEditForm = false
-    @State private var showAddArtifact = false
-    @State private var showAddInteraction = false
-    @State private var editingArtifact: Artifact?
-    @State private var editingInteraction: Interaction?
+    @State private var showAddFact = false
+    @State private var editingFact: Artifact?
+    @State private var showSearch = false
+    @State private var search = ""
+    @State private var actionFilter: String?
+    @State private var showDeleteConfirm = false
 
-    // Profile State
-    @State private var collapsedArtifactCategories: Set<String> = []
-
-    // Activity State
-    @State private var impulseFilter: String?
-    @State private var interactionSearch = ""
-    @State private var expandedMonths: Set<String> = []
-
-    // MARK: - Body
+    private let keyColumnWidth: CGFloat = 96
+    private let dateGutterWidth: CGFloat = 52
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                
-                // 1. The Sticky Hero Header
-                contactHeroHeader
-                    .padding(.bottom, OrbitSpacing.md)
-
-                // 2. The Pinned Facet Toggle
-                Section {
-                    switch selectedTab {
-                    case .profile:
-                        profileFacet
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    case .activity:
-                        activityFacet
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                } header: {
-                    facetPicker
+        List {
+            Section {
+                header
+                actionRow
+                if !contact.notes.isEmpty {
+                    Text(contact.notes)
+                        .font(OrbitTypography.headline.weight(.regular))
+                        .lineSpacing(4)
+                        .padding(.vertical, OrbitSpacing.xs)
+                        .textSelection(.enabled)
                 }
             }
+            .listRowSeparator(.hidden)
+
+            factsSection
+            timelineSection
         }
-        .background(OrbitColors.commandBackground.ignoresSafeArea())
+        .listStyle(.plain)
         .navigationTitle(contact.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar { toolbarContent }
-        // Sheets
         .sheet(isPresented: $showEditForm) { ContactFormSheet(mode: .edit(contact)) }
-        .sheet(isPresented: $showAddArtifact) { ArtifactEditSheet(contact: contact, mode: .add) }
-        .sheet(isPresented: $showAddInteraction) { QuickInteractionSheet(contact: contact) }
-        .sheet(item: $editingArtifact) { artifact in ArtifactEditSheet(contact: contact, mode: .edit(artifact)) }
-        .sheet(item: $editingInteraction) { interaction in InteractionEditSheet(interaction: interaction) }
-        .onAppear {
-            let recentKeys = groupedInteractions.prefix(2).map(\.key)
-            expandedMonths = Set(recentKeys)
+        .sheet(isPresented: $showAddFact) { ArtifactEditSheet(contact: contact, mode: .add) }
+        .sheet(item: $editingFact) { fact in ArtifactEditSheet(contact: contact, mode: .edit(fact)) }
+        .confirmationDialog("Delete \(contact.name)?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete permanently", role: .destructive) {
+                let target = contact
+                router.forget(target)
+                store.deleteContacts([target])
+            }
+        } message: {
+            Text("This removes \(contact.name), their facts and their whole history, and can't be undone. Archiving hides them instead and can be reversed.")
         }
     }
 
-    // MARK: - Hero Header
+    // MARK: - Header
 
-    private var contactHeroHeader: some View {
-        VStack(spacing: OrbitSpacing.md) {
-            // Avatar
-            ZStack {
-                Circle()
-                    .fill(contact.isDrifting ? contact.driftColor.opacity(0.2) : Color.accentColor.opacity(0.1))
-                    .frame(width: 80, height: 80)
-                
-                Text(initials(for: contact.name))
-                    .font(.system(size: 32, weight: .semibold, design: .rounded))
-                    .foregroundStyle(contact.isDrifting ? contact.driftColor : Color.accentColor)
+    private var header: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            Text(contact.name)
+                .font(OrbitTypography.contactNameLarge(orbit: contact.targetOrbit))
+                .textSelection(.enabled)
+
+            Text(statusLine)
+                .font(OrbitTypography.body)
+                .foregroundStyle(contact.isDrifting ? AnyShapeStyle(contact.driftColor) : AnyShapeStyle(.secondary))
+
+            HStack(spacing: OrbitSpacing.sm) {
+                closenessMenu
+                if contact.isSnoozed, let until = contact.snoozedUntil {
+                    Button {
+                        store.snooze([contact], until: nil)
+                    } label: {
+                        Label("Snoozed until \(until.formatted(.dateTime.day().month(.abbreviated)))", systemImage: "moon.zzz")
+                            .font(OrbitTypography.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Tap to unsnooze")
+                }
+                if contact.isArchived {
+                    Text("Archived").font(OrbitTypography.caption).foregroundStyle(.secondary)
+                }
             }
-            .padding(.top, OrbitSpacing.md)
 
-            // Name & Orbit
-            VStack(spacing: OrbitSpacing.xs) {
-                Text(contact.name)
-                    .font(OrbitTypography.contactNameLarge(orbit: contact.targetOrbit))
-                    .multilineTextAlignment(.center)
+            if !contextLine.isEmpty {
+                Text(contextLine)
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, OrbitSpacing.md)
+    }
 
-                HStack(spacing: OrbitSpacing.sm) {
-                    Label(contact.orbitZoneName, systemImage: "circle.dotted")
-                    if contact.daysSinceLastContact != nil {
-                        Text("·").foregroundStyle(.tertiary)
-                        Label(contact.recencyDescription, systemImage: "clock")
-                            .foregroundStyle(contact.isDrifting ? contact.driftColor : .secondary)
+    private var statusLine: String {
+        if let reason = contact.attentionReason { return reason }
+        guard let last = contact.lastContactDate else {
+            return contact.targetOrbit == 4 ? "No reminders for \(firstName)." : "Nothing logged yet."
+        }
+        return "Last in touch \(last.relativeDescription.lowercased()) — on track."
+    }
+
+    private var firstName: String {
+        contact.name.split(separator: " ").first.map(String.init) ?? contact.name
+    }
+
+    private var contextLine: String {
+        var parts: [String] = []
+        let groups = (contact.constellations ?? []).map { "✦ \($0.name)" }
+        if !groups.isEmpty { parts.append(groups.joined(separator: "  ")) }
+        let tags = contact.aggregatedTags.prefix(8).map { "#\($0.name)" }
+        if !tags.isEmpty { parts.append(tags.joined(separator: " ")) }
+        return parts.joined(separator: "   ")
+    }
+
+    private var closenessMenu: some View {
+        Menu {
+            ForEach(OrbitZone.allZones, id: \.id) { zone in
+                Button {
+                    store.setCloseness(zone.id, for: [contact])
+                } label: {
+                    if zone.id == contact.targetOrbit && contact.closenessConfirmed {
+                        Label("\(zone.name) · \(AttentionEngine.cadenceWord(forOrbit: zone.id))", systemImage: "checkmark")
+                    } else {
+                        Text("\(zone.name) · \(AttentionEngine.cadenceWord(forOrbit: zone.id))")
                     }
                 }
+            }
+        } label: {
+            Label(closenessLabel, systemImage: "circle.dotted")
                 .font(OrbitTypography.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            // Quick Actions
-            HStack(spacing: OrbitSpacing.md) {
-                quickActionCircle("Call", icon: "phone.fill") { quickLog(impulse: "Call") }
-                quickActionCircle("Message", icon: "message.fill") { quickLog(impulse: "Text") }
-                quickActionCircle("Coffee", icon: "cup.and.saucer.fill") { quickLog(impulse: "Coffee") }
-                quickActionCircle("Log", icon: "plus") { showAddInteraction = true }
-            }
-            .padding(.top, OrbitSpacing.xs)
         }
-        .frame(maxWidth: .infinity)
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize()
     }
 
-    private func quickActionCircle(_ label: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .frame(width: 44, height: 44)
-                    .background(Color.secondary.opacity(0.1), in: Circle())
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
+    private var closenessLabel: String {
+        if !contact.closenessConfirmed && contact.cachedInteractionCount == 0 { return "Set closeness" }
+        return "\(contact.orbitZoneName) · \(AttentionEngine.cadenceWord(forOrbit: contact.targetOrbit))"
+    }
+
+    // MARK: - Actions
+
+    private var actionRow: some View {
+        HStack(spacing: OrbitSpacing.sm) {
+            Button { router.log([contact]) } label: {
+                Label("Log", systemImage: "plus.bubble")
             }
+            .buttonStyle(.borderedProminent)
+
+            Menu {
+                ForEach(store.actionSuggestions(limit: 4), id: \.self) { action in
+                    Button(action) { store.log(contacts: [contact], action: action) }
+                }
+            } label: {
+                Label("Quick log", systemImage: "bolt")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .fixedSize()
+
+            Button { showAddFact = true } label: {
+                Label("Add fact", systemImage: "text.badge.plus")
+            }
+            .buttonStyle(.bordered)
+
+            Spacer(minLength: 0)
+        }
+        .controlSize(.small)
+        .padding(.vertical, OrbitSpacing.xs)
+    }
+
+    // MARK: - Facts
+
+    @ViewBuilder
+    private var factsSection: some View {
+        Section {
+            if (contact.artifacts ?? []).isEmpty {
+                Button { showAddFact = true } label: {
+                    Text("Add something worth remembering — a birthday, kids' names, their favourite coffee.")
+                        .font(OrbitTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+            } else {
+                ForEach(groupedFacts, id: \.category) { group in
+                    if groupedFacts.count > 1 {
+                        Text(group.category.rawValue.uppercased())
+                            .font(OrbitTypography.footnote)
+                            .tracking(1.5)
+                            .foregroundStyle(.secondary)
+                            .listRowSeparator(.hidden)
+                    }
+                    ForEach(group.artifacts) { fact in
+                        factRow(fact, demoted: group.category == .contactInfo)
+                    }
+                }
+            }
+        } header: {
+            sectionHeader("FACTS") {
+                Button("Add") { showAddFact = true }
+                    .font(OrbitTypography.caption)
+            }
+        }
+    }
+
+    private func factRow(_ fact: Artifact, demoted: Bool) -> some View {
+        Button { editingFact = fact } label: {
+            HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
+                Text(fact.key.lowercased())
+                    .font(OrbitTypography.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(width: keyColumnWidth, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(fact.listValues, id: \.self) { item in
+                        Text(item)
+                            .font(demoted ? OrbitTypography.caption : OrbitTypography.body)
+                            .foregroundStyle(demoted ? .secondary : .primary)
+                    }
+                    if let date = fact.dateValue, let days = Birthdays.daysUntil(date, from: Date()), days <= 30 {
+                        Text(days == 0 ? "Today" : "In \(days) day\(days == 1 ? "" : "s")")
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color.accentColor)
-    }
-
-    private func initials(for name: String) -> String {
-        let parts = name.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        guard !parts.isEmpty else { return "?" }
-        if parts.count == 1 { return String(parts[0].prefix(1)).uppercased() }
-        return (String(parts[0].prefix(1)) + String(parts.last!.prefix(1))).uppercased()
-    }
-
-    // MARK: - Facet Picker (Sticky Header)
-
-    private var facetPicker: some View {
-        VStack(spacing: 0) {
-            Picker("View", selection: $selectedTab.animation(.easeInOut(duration: 0.2))) {
-                Text("Profile").tag(DetailTab.profile)
-                Text("Activity").tag(DetailTab.activity)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.vertical, OrbitSpacing.sm)
-            
-            Divider()
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) { store.deleteFacts([fact]) } label: { Label("Delete", systemImage: "trash") }
         }
-        // Use standard background to blur/block content when pinned to top
-        .background(.regularMaterial)
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { editingFact = fact }
+            Button("Delete", systemImage: "trash", role: .destructive) { store.deleteFacts([fact]) }
+        }
     }
 
-    // MARK: - Profile Facet
+    // MARK: - Timeline
 
-    private var profileFacet: some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.xl) {
-            
-            // Context Block (Notes, Tags, Constellations)
-            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                if !contact.notes.isEmpty {
-                    Text(contact.notes)
-                        .font(OrbitTypography.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !contact.aggregatedTags.isEmpty || !(contact.constellations ?? []).isEmpty {
-                    FlowLayout(spacing: OrbitSpacing.sm) {
-                        ForEach(contact.aggregatedTags.prefix(8)) { tag in
-                            Text("#\(tag.name)")
-                                .font(OrbitTypography.caption)
-                                .foregroundStyle(OrbitColors.syntaxTag)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(OrbitColors.syntaxTag.opacity(0.1), in: Capsule())
-                        }
-                        ForEach(contact.constellations ?? []) { constellation in
-                            Text("✦ \(constellation.name)")
-                                .font(OrbitTypography.caption)
-                                .foregroundStyle(.purple)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Color.purple.opacity(0.1), in: Capsule())
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.top, OrbitSpacing.md)
-
-            // Artifacts
-            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                HStack {
-                    Text("ARTIFACTS")
-                        .font(OrbitTypography.captionMedium)
+    @ViewBuilder
+    private var timelineSection: some View {
+        Section {
+            if showSearch { timelineFilters }
+            if filteredInteractions.isEmpty {
+                Text(contact.cachedInteractionCount == 0 ? "Nothing logged yet." : "No logs match.")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(groupedInteractions, id: \.key) { month in
+                    Text(month.key.uppercased())
+                        .font(OrbitTypography.footnote)
                         .tracking(1.5)
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    Button { showAddArtifact = true } label: {
-                        Image(systemName: "plus").font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if (contact.artifacts ?? []).isEmpty {
-                    Text("No artifacts saved yet.")
-                        .font(OrbitTypography.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    ForEach(groupedArtifacts, id: \.category) { group in
-                        artifactCategorySection(group.category, artifacts: group.artifacts)
+                        .listRowSeparator(.hidden)
+                        .padding(.top, OrbitSpacing.sm)
+                    ForEach(month.interactions) { interaction in
+                        timelineRow(interaction)
                     }
                 }
             }
-            .padding(.horizontal, OrbitSpacing.lg)
+        } header: {
+            sectionHeader("ACTIVITY") {
+                HStack(spacing: OrbitSpacing.md) {
+                    Text("\(contact.cachedInteractionCount)")
+                        .font(OrbitTypography.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Log") { router.log([contact]) }
+                        .font(OrbitTypography.caption)
+                }
+            }
         }
-        .padding(.bottom, OrbitSpacing.xxxl)
     }
 
-    // MARK: - Activity Facet
-
-    private var activityFacet: some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-            
-            // Search & Filter
-            VStack(spacing: OrbitSpacing.sm) {
-                HStack(spacing: OrbitSpacing.sm) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
-                    TextField("Search interactions…", text: $interactionSearch)
-                        .font(OrbitTypography.caption).textFieldStyle(.plain)
-                    if !interactionSearch.isEmpty {
-                        Button { interactionSearch = "" } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.caption)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, OrbitSpacing.sm)
-                .padding(.vertical, 6)
-                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-
-                if uniqueImpulses.count > 1 {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: OrbitSpacing.xs) {
-                            impulseChip("All", isActive: impulseFilter == nil) { impulseFilter = nil }
-                            ForEach(uniqueImpulses, id: \.self) { impulse in
-                                impulseChip(impulse, isActive: impulseFilter?.lowercased() == impulse.lowercased()) {
-                                    impulseFilter = (impulseFilter?.lowercased() == impulse.lowercased()) ? nil : impulse
-                                }
+    private var timelineFilters: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            TextField("Search this timeline", text: $search)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+            if uniqueActions.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: OrbitSpacing.sm) {
+                        filterChip("All", active: actionFilter == nil) { actionFilter = nil }
+                        ForEach(uniqueActions, id: \.self) { action in
+                            filterChip(action, active: actionFilter?.lowercased() == action.lowercased()) {
+                                actionFilter = actionFilter?.lowercased() == action.lowercased() ? nil : action
                             }
                         }
                     }
                 }
             }
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.top, OrbitSpacing.md)
-
-            // Timeline List
-            if filteredInteractions.isEmpty {
-                ContentUnavailableView("No Interactions", systemImage: "bubble.left.and.exclamationmark.bubble.right", description: Text("No logs match your filters."))
-                    .padding(.top, OrbitSpacing.xl)
-            } else {
-                LazyVStack(alignment: .leading, spacing: OrbitSpacing.lg) {
-                    ForEach(Array(groupedInteractions.enumerated()), id: \.element.key) { index, group in
-                        collapsibleMonthGroup(group)
-                    }
-                }
-                .padding(.horizontal, OrbitSpacing.lg)
-            }
         }
-        .padding(.bottom, OrbitSpacing.xxxl)
+        .listRowSeparator(.hidden)
     }
 
-    // MARK: - Support Sub-Views (Unchanged Data Logic)
+    private func filterChip(_ label: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(label, action: action)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(active ? .accentColor : .secondary)
+    }
 
-    private func impulseChip(_ label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(OrbitTypography.footnote)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(
-                    isActive ? OrbitColors.syntaxImpulse.opacity(0.15) : Color.secondary.opacity(0.08),
-                    in: Capsule()
-                )
-                .foregroundStyle(isActive ? OrbitColors.syntaxImpulse : .secondary)
+    private func timelineRow(_ interaction: Interaction) -> some View {
+        Button { router.edit(interaction) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
+                Text(interaction.date.formatted(.dateTime.day().month(.abbreviated)))
+                    .font(OrbitTypography.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: dateGutterWidth, alignment: .leading)
+                VStack(alignment: .leading, spacing: OrbitSpacing.xs) {
+                    HStack(spacing: OrbitSpacing.xs) {
+                        Text(interaction.impulse).font(OrbitTypography.bodyMedium)
+                        if interaction.batchID != nil {
+                            Image(systemName: "person.2").font(.caption2).foregroundStyle(.secondary)
+                                .accessibilityLabel("Logged with others")
+                        }
+                    }
+                    if !interaction.content.isEmpty {
+                        Text(interaction.content)
+                            .font(OrbitTypography.body)
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(2)
+                    }
+                    if !interaction.tagList.isEmpty {
+                        Text(interaction.tagList.map { "#\($0)" }.joined(separator: " "))
+                            .font(OrbitTypography.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private func collapsibleMonthGroup(_ group: (key: String, interactions: [Interaction])) -> some View {
-        let isExpanded = expandedMonths.contains(group.key)
-        return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    if isExpanded { expandedMonths.remove(group.key) }
-                    else { expandedMonths.insert(group.key) }
-                }
-            } label: {
-                HStack(spacing: OrbitSpacing.sm) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary).frame(width: 12)
-                    Text(group.key).font(OrbitTypography.footnote).foregroundStyle(.tertiary)
-                        .textCase(.uppercase).tracking(1)
-                    Text("(\(group.interactions.count))").font(OrbitTypography.footnote).foregroundStyle(.quaternary)
-                    Spacer()
-                }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) { store.delete(interaction, includeBatch: false) } label: {
+                Label("Delete", systemImage: "trash")
             }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(spacing: OrbitSpacing.sm) {
-                                    ForEach(group.interactions) { interaction in
-                                        InteractionRowContent(
-                                            group: InteractionGroup(id: interaction.id, interactions: [interaction]),
-                                            showContactNames: false,
-                                            showChevron: true
-                                        )
-                                        .padding(OrbitSpacing.sm)
-                                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                                        .onTapGesture { editingInteraction = interaction }
-                                        .contextMenu {
-                                            Button("Edit", systemImage: "pencil") { editingInteraction = interaction }
-                                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                                interaction.isDeleted = true
-                                                contact.refreshCachedFields()
-                                                try? modelContext.save()
-                                            }
-                                        }
-                                    }
-                                }
-                .padding(.top, 4)
-            }
+        }
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { router.edit(interaction) }
+            Button("Delete", systemImage: "trash", role: .destructive) { store.delete(interaction, includeBatch: false) }
         }
     }
 
-    private func artifactCategorySection(_ category: ArtifactCategory, artifacts: [Artifact]) -> some View {
-        let isCollapsed = collapsedArtifactCategories.contains(category.rawValue)
-
-        return VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    if isCollapsed { collapsedArtifactCategories.remove(category.rawValue) }
-                    else { collapsedArtifactCategories.insert(category.rawValue) }
-                }
-            } label: {
-                HStack(spacing: OrbitSpacing.xs) {
-                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary).frame(width: 12)
-                    Image(systemName: category.icon).font(.caption2).foregroundStyle(.tertiary)
-                    Text(category.rawValue.uppercased()).font(OrbitTypography.footnote).tracking(1).foregroundStyle(.tertiary)
-                    Text("(\(artifacts.count))").font(OrbitTypography.footnote).foregroundStyle(.quaternary)
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.top, OrbitSpacing.sm)
-
-            if !isCollapsed {
-                ForEach(artifacts) { artifact in
-                    ArtifactRowView(artifact: artifact)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingArtifact = artifact }
-                        .contextMenu {
-                            Button("Edit", systemImage: "pencil") { editingArtifact = artifact }
-                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                modelContext.delete(artifact)
-                                contact.modifiedAt = Date()
-                                try? modelContext.save()
-                            }
-                        }
-                }
-            }
+    private func sectionHeader<Trailing: View>(_ label: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack {
+            Text(label)
+                .font(OrbitTypography.captionMedium)
+                .tracking(2)
+                .foregroundStyle(.secondary)
+            Spacer()
+            trailing()
         }
-    }
-
-    private func quickLog(impulse: String) {
-        let interaction = Interaction(impulse: impulse, date: Date())
-        interaction.contact = contact
-        modelContext.insert(interaction)
-        contact.refreshLastContactDate()
-        spotlightIndexer.index(contact: contact)
-        try? modelContext.save()
     }
 
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .automatic) {
-            Button { showEditForm = true } label: { Image(systemName: "pencil") }
-            
-            Menu {
-                Button("Add Artifact", systemImage: "key") { showAddArtifact = true }
-                Button("Log Interaction", systemImage: "plus.bubble") { showAddInteraction = true }
-                Divider()
-                Button(contact.isArchived ? "Restore" : "Archive", systemImage: "archivebox") {
-                    contact.isArchived.toggle()
-                    contact.modifiedAt = Date()
-                    if contact.isArchived { spotlightIndexer.deindex(contact: contact) }
-                    else { spotlightIndexer.index(contact: contact) }
-                    try? modelContext.save()
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                withAnimation {
+                    showSearch.toggle()
+                    if !showSearch { search = ""; actionFilter = nil }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Label("Search timeline", systemImage: showSearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
+            }
+
+            Button { showEditForm = true } label: { Label("Edit", systemImage: "pencil") }
+
+            Menu {
+                Section("Snooze") {
+                    Button("For a week") { snooze(days: 7) }
+                    Button("For a month") { snooze(days: 30) }
+                    if contact.isSnoozed { Button("Unsnooze") { store.snooze([contact], until: nil) } }
+                }
+                Section {
+                    Button(contact.isArchived ? "Restore" : "Archive", systemImage: "archivebox") {
+                        store.setArchived(!contact.isArchived, for: [contact])
+                    }
+                    Button("Delete…", systemImage: "trash", role: .destructive) { showDeleteConfirm = true }
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
             }
         }
     }
 
-    // MARK: - Artifact Categories & Filtering (Unchanged)
-    
+    private func snooze(days: Int) {
+        let until = Calendar.current.date(byAdding: .day, value: days, to: Calendar.current.startOfDay(for: Date()))
+        store.snooze([contact], until: until)
+    }
+
+    // MARK: - Fact categories
+
     enum ArtifactCategory: String, CaseIterable {
-        case contactInfo = "Contact Info", personal = "Personal", professional = "Professional", other = "Other"
-        var icon: String {
-            switch self {
-            case .contactInfo: return "phone.circle"
-            case .personal: return "heart.circle"
-            case .professional: return "briefcase"
-            case .other: return "ellipsis.circle"
-            }
-        }
+        case personal = "Personal", professional = "Professional", other = "Other", contactInfo = "Contact Info"
+
         static func category(for artifact: Artifact) -> ArtifactCategory {
             if let explicit = artifact.category, !explicit.isEmpty {
                 switch explicit {
@@ -434,13 +421,13 @@ struct ContactDetailView: View {
             }
             let k = artifact.key.lowercased()
             if ["email", "phone", "address", "city", "location", "website", "social", "instagram", "twitter", "linkedin", "github", "country"].contains(where: { k.contains($0) }) { return .contactInfo }
-            if ["birthday", "anniversary", "born", "dob", "spouse", "wife", "husband", "partner", "children", "kids", "likes", "dislikes", "hobbies", "interests", "allergies", "pronouns", "hometown", "zodiac", "nickname", "pet", "pets", "favorite"].contains(where: { k.contains($0) }) { return .personal }
+            if ["birthday", "anniversary", "born", "dob", "spouse", "wife", "husband", "partner", "children", "kids", "likes", "dislikes", "hobbies", "interests", "allergies", "pronouns", "hometown", "zodiac", "nickname", "pet", "pets", "favorite", "favourite"].contains(where: { k.contains($0) }) { return .personal }
             if ["company", "role", "title", "job", "department", "team", "met_at", "school", "university", "org", "organization", "industry"].contains(where: { k.contains($0) }) { return .professional }
             return .other
         }
     }
 
-    private var groupedArtifacts: [(category: ArtifactCategory, artifacts: [Artifact])] {
+    private var groupedFacts: [(category: ArtifactCategory, artifacts: [Artifact])] {
         let sorted = (contact.artifacts ?? []).sorted { $0.key < $1.key }
         let grouped = Dictionary(grouping: sorted) { ArtifactCategory.category(for: $0) }
         return ArtifactCategory.allCases.compactMap { category in
@@ -451,18 +438,19 @@ struct ContactDetailView: View {
 
     private var filteredInteractions: [Interaction] {
         var result = contact.activeInteractions
-        if let filter = impulseFilter { result = result.filter { $0.impulse.lowercased() == filter.lowercased() } }
-        if !interactionSearch.isEmpty {
-            let query = interactionSearch.lowercased()
-            result = result.filter { $0.impulse.lowercased().contains(query) || $0.content.lowercased().contains(query) || $0.tagNames.lowercased().contains(query) }
+        if let filter = actionFilter { result = result.filter { $0.impulse.lowercased() == filter.lowercased() } }
+        if !search.isEmpty {
+            let q = search.lowercased()
+            result = result.filter {
+                $0.impulse.lowercased().contains(q) || $0.content.lowercased().contains(q) || $0.tagNames.lowercased().contains(q)
+            }
         }
         return result
     }
 
-    private var uniqueImpulses: [String] {
-        let impulses = contact.activeInteractions.map(\.impulse)
+    private var uniqueActions: [String] {
         var seen = Set<String>()
-        return impulses.filter { seen.insert($0.lowercased()).inserted }.sorted()
+        return contact.activeInteractions.map(\.impulse).filter { seen.insert($0.lowercased()).inserted }.sorted()
     }
 
     private var groupedInteractions: [(key: String, interactions: [Interaction])] {

@@ -68,53 +68,32 @@ extension Color {
 #endif
 
 // MARK: - Typography
-// Contact names use variable weight to encode relationship strength.
-// Phase 1: Maps targetOrbit to weight (simpler). Phase 3 will use cachedMomentum.
-// Uses the system font (SF Pro) which has excellent variable weight support.
+// One encoding everywhere: a contact's name weight reflects their closeness
+// (the orbit the user chose). Recency and drift are said in words and, where
+// it matters, a single colour — never by fading the name, so the people you
+// most need to see are never the hardest to read.
 enum OrbitTypography {
 
     // MARK: Contact Name Display
 
-    /// Contact name styled by orbit proximity.
-    /// Inner circle = heavy, deep space = thin.
+    /// Contact name styled by closeness. Inner circle = bold, deep space = regular.
     static func contactName(orbit: Int) -> Font {
-        let weight = weightForOrbit(orbit)
-        return .system(size: 17, weight: weight, design: .default)
+        .system(size: 17, weight: weightForOrbit(orbit), design: .default)
     }
 
     /// Large contact name for detail views
     static func contactNameLarge(orbit: Int) -> Font {
-        let weight = weightForOrbit(orbit)
-        return .system(size: 28, weight: weight, design: .default)
+        .system(size: 28, weight: weightForOrbit(orbit), design: .default)
     }
 
-    /// Map orbit zone (0–4) to font weight
-    /// 0 (Inner Circle) → .bold
-    /// 4 (Deep Space) → .ultraLight
+    /// Map orbit zone (0–4) to font weight. The floor is .regular so names
+    /// always meet contrast and legibility expectations.
     private static func weightForOrbit(_ orbit: Int) -> Font.Weight {
         switch orbit {
-        case 0: return .heavy       // was .bold
-        case 1: return .bold        // was .semibold
-        case 2: return .medium      // unchanged
-        case 3: return .light       // was .regular
-        case 4: return .ultraLight  // was .light
+        case 0: return .bold
+        case 1: return .semibold
+        case 2: return .medium
         default: return .regular
-        }
-    }
-
-    // MARK: Opacity for Cadence
-
-    /// Opacity based on days since last contact.
-    /// Recently contacted → fully opaque. Neglected → translucent.
-    static func opacityForRecency(daysSinceContact: Int?) -> Double {
-        guard let days = daysSinceContact else { return 0.4 } // Never contacted
-        switch days {
-        case 0...7: return 1.0
-        case 8...30: return 0.85
-        case 31...90: return 0.65
-        case 91...180: return 0.5
-        case 181...365: return 0.35
-        default: return 0.25
         }
     }
 
@@ -140,11 +119,11 @@ enum OrbitTypography {
 // MARK: - Orbit Zone Helpers
 enum OrbitZone {
     static let allZones: [(id: Int, name: String, description: String)] = [
-        (0, "Inner Circle", "Your closest relationships — partners, family, best friends"),
-        (1, "Near Orbit", "Close friends you see regularly"),
-        (2, "Mid Orbit", "Good friends and active colleagues"),
-        (3, "Outer Orbit", "Acquaintances and distant friends"),
-        (4, "Deep Space", "Archived or very distant connections"),
+        (0, "Inner Circle", "Your closest people — partners, family, best friends. Weekly."),
+        (1, "Near Orbit", "Close friends you see regularly. Monthly."),
+        (2, "Mid Orbit", "Good friends and active colleagues. Every few months."),
+        (3, "Outer Orbit", "Acquaintances and distant friends. Yearly."),
+        (4, "Deep Space", "People you don't need reminders about."),
     ]
 
     static func name(for orbit: Int) -> String {

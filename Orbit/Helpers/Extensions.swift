@@ -67,6 +67,7 @@ struct OrbitExporter {
                 "targetOrbit": contact.targetOrbit,
                 "targetOrbitName": contact.orbitZoneName,
                 "isArchived": contact.isArchived,
+                "closenessConfirmed": contact.closenessConfirmed,
                 "createdAt": isoFormatter.string(from: contact.createdAt),
                 "modifiedAt": isoFormatter.string(from: contact.modifiedAt),
             ]
@@ -78,6 +79,10 @@ struct OrbitExporter {
                 entry["gravityScore"] = score
             } else {
                 entry["gravityScore"] = 999.0 // Fallback ceiling value for Infinity
+            }
+
+            if let snoozed = contact.snoozedUntil {
+                entry["snoozedUntil"] = isoFormatter.string(from: snoozed)
             }
 
             // Last Contact & Days Since

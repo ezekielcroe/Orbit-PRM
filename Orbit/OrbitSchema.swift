@@ -29,6 +29,9 @@ final class Contact {
     var isArchived: Bool = false
 
     // Phase 3 Foundations
+    // cachedMomentum and cachedCadenceDays are computed by recomputeMomentum()
+    // (Helpers/Momentum.swift) on every refreshCachedFields() and on app
+    // launch/foreground. gravityScore remains a reserved user-tunable field.
     var targetOrbit: Int = 2
     var gravityScore: Double = 5.0
     var cachedMomentum: Double = 0.0
@@ -47,6 +50,20 @@ final class Contact {
     /// "Has Artifacts" filter without faulting the relationship.
     var cachedHasArtifacts: Bool = false
 
+    // V2 additions — all additive with defaults, so SwiftData's automatic
+    // lightweight migration and the CloudKit schema both accept them.
+
+    /// Hidden from Today until this date. nil = not snoozed.
+    var snoozedUntil: Date?
+
+    /// The user has explicitly chosen this person's closeness. Imported
+    /// contacts start unconfirmed so they don't flood Today on day one.
+    var closenessConfirmed: Bool = false
+
+    /// Lowercased name, notes, facts, tags and groups, for People search.
+    /// Rebuilt by refreshCachedFields() / refreshArtifactCache().
+    var searchText: String = ""
+
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \Interaction.contact)
     var interactions: [Interaction]?
@@ -64,7 +81,7 @@ final class Contact {
         return lastContactDate ?? .distantPast
     }
 
-    init(name: String, notes: String = "", targetOrbit: Int = 2) {
+    init(name: String, notes: String = "", targetOrbit: Int = 2, closenessConfirmed: Bool = false) {
         self.id = UUID()
         self.name = name
         self.searchableName = name.lowercased()
@@ -79,6 +96,8 @@ final class Contact {
         self.cachedInteractionCount = 0
         self.cachedTagSummary = ""
         self.cachedHasArtifacts = false
+        self.closenessConfirmed = closenessConfirmed
+        self.searchText = name.lowercased()
     }
 
     var orbitZoneName: String {
@@ -128,15 +147,47 @@ final class Contact {
         // 4. Artifact presence
         cachedHasArtifacts = !(artifacts ?? []).isEmpty
 
-        // 5. Timestamp
+        // 5. Momentum + observed cadence (implemented in Helpers/MomentumEngine.swift)
+        recomputeMomentum(using: active)
+
+        // 6. Search text
+        refreshSearchText(tagNames: tagCounts.keys.sorted())
+
+        // 7. Timestamp
         modifiedAt = Date()
     }
 
-    /// Convenience: refresh just the artifact cache flag.
+    /// Convenience: refresh just the artifact cache flag and search text.
     /// Call after adding/removing artifacts without touching interactions.
     func refreshArtifactCache() {
         cachedHasArtifacts = !(artifacts ?? []).isEmpty
+        for artifact in artifacts ?? [] { artifact.refreshDateValue() }
+        refreshSearchText()
         modifiedAt = Date()
+    }
+
+    /// Rebuild `searchText`. Pass `tagNames` when already computed.
+    func refreshSearchText(tagNames: [String]? = nil) {
+        var parts: [String] = [name, notes]
+        for artifact in artifacts ?? [] {
+            parts.append(artifact.key)
+            parts.append(contentsOf: artifact.listValues)
+        }
+        parts.append(contentsOf: tagNames ?? cachedTagSummary.split(separator: ",").map(String.init))
+        parts.append(contentsOf: (constellations ?? []).map(\.name))
+        searchText = parts
+            .filter { !$0.isEmpty }
+            .joined(separator: " \u{1F} ")   // unit separator keeps fields from running together
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    /// Search across name, notes, facts, tags and groups.
+    func matchesSearch(_ query: String) -> Bool {
+        let q = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return true }
+        let haystack = searchText.isEmpty ? name.lowercased() : searchText
+        return q.split(separator: " ").allSatisfy { haystack.contains($0) }
     }
 
     // MARK: - Backward Compatibility
@@ -204,13 +255,21 @@ final class Contact {
         }
     }
 
-    /// Whether this contact has exceeded the cadence threshold for their orbit zone
+    /// Whether this contact has exceeded the cadence threshold for their orbit zone.
+    /// A contact with no history only counts once the user has confirmed their
+    /// closeness — importing 200 people must not make 200 people "drifting".
     var isDrifting: Bool {
-        guard targetOrbit < 4 else { return false }
+        guard targetOrbit < 4, !isArchived else { return false }
         guard let days = daysSinceLastContact else {
-            return true // Never contacted and not Deep Space
+            return closenessConfirmed
         }
         return days > cadenceThreshold
+    }
+
+    /// Whether this contact is snoozed off Today right now.
+    var isSnoozed: Bool {
+        guard let until = snoozedUntil else { return false }
+        return until > Date()
     }
 
     /// How severely this contact is drifting (>1 means past threshold)
@@ -231,10 +290,10 @@ final class Contact {
 
     /// Colour representing drift severity
     var driftColor: Color {
+        guard isDrifting else { return .secondary }
         if driftRatio > 3.0 { return .red }
         if driftRatio > 1.5 { return .orange }
-        if isDrifting { return .yellow }
-        return .secondary
+        return .yellow
     }
 
     /// Active (non-deleted) interactions, sorted most recent first.
@@ -288,7 +347,18 @@ final class Interaction {
     }
 
     var tagList: [String] {
-        tagNames.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        tagNames.split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Store tags in the canonical form: lowercase, trimmed, de-duplicated.
+    func setTags(_ tags: [String]) {
+        var seen = Set<String>()
+        tagNames = tags
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .joined(separator: ", ")
     }
 }
 
@@ -304,6 +374,10 @@ final class Artifact {
     var createdAt: Date = Date()
     var modifiedAt: Date = Date()
     var contact: Contact?
+
+    /// V2: parsed date for recurring date facts (birthday, anniversary) so
+    /// reminders don't have to re-parse free text. nil when not a date.
+    var dateValue: Date?
 
     init(key: String, value: String, isArray: Bool = false, category: String? = nil) {
         self.id = UUID()
@@ -350,6 +424,16 @@ final class Artifact {
         isArray = false
         value = newValue
         modifiedAt = Date()
+    }
+
+    /// Re-parse `dateValue` from `value` for recurring date facts.
+    func refreshDateValue() {
+        guard Birthdays.isRecurringDateKey(key), !isArray else {
+            if dateValue != nil { dateValue = nil }
+            return
+        }
+        let parsed = DatePhraseParser().parseCalendarDate(value)?.date
+        if parsed != dateValue { dateValue = parsed }
     }
 
     var isDateType: Bool {

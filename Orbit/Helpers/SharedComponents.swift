@@ -7,7 +7,7 @@ import SwiftUI
 // MARK: - FlowLayout
 // A horizontal wrapping layout for tags, pills, and other inline elements.
 // Used by ContactDetailView, ContactFormSheet, ArtifactEditSheet,
-// QuickInteractionSheet, and CommandPaletteView.
+// LogComposer, and CommandPaletteView.
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8

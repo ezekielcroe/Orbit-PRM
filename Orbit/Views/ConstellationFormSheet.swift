@@ -13,6 +13,7 @@ import SwiftData
 
 struct ConstellationFormSheet: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(OrbitStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     // Query active contacts to allow assignment during creation
@@ -81,7 +82,7 @@ struct ConstellationFormSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle(editingConstellation == nil ? "New Constellation" : "Edit Constellation")
+            .navigationTitle(editingConstellation == nil ? "New group" : "Edit group")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -141,7 +142,9 @@ struct ConstellationFormSheet: View {
             modelContext.insert(constellation)
         }
         
-        try? modelContext.save()
+        // Group names are part of each member's search text.
+        store.refresh(store.activeContacts(includeArchived: true))
+        store.save("save group")
         dismiss()
     }
 }
@@ -157,7 +160,7 @@ struct ContactSelectionView: View {
     var filteredContacts: [Contact] {
         if searchText.isEmpty { return allContacts }
         let query = searchText.lowercased()
-        return allContacts.filter { $0.searchableName.contains(query) }
+        return allContacts.filter { $0.matchesSearch(query) }
     }
     
     var body: some View {
