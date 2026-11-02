@@ -2,95 +2,165 @@
 //  TodayView.swift
 //  Orbit
 //
-//  Created by Yeo Zhi Zheng on 12/7/26.
-//
-
-
-//
-//  TodayView.swift
-//  Orbit
-//
-//  The home surface. Answers one question — who needs me — before
-//  anything else in the app. Same editorial grammar as the detail
-//  pages: masthead, status sentence, hairline-ruled sections, flush
-//  rows, color only where drift is.
+//  The home surface: a short list of people to reach out to today, chosen
+//  once per day so it doesn't reshuffle while you work through it. Each row
+//  says why in plain words and has visible actions — log, snooze, change
+//  closeness — instead of hiding them behind a long-press.
 //
 //  Sections:
-//    NEEDS ATTENTION — drifting contacts, ranked by driftPriority.
-//    LOSING MOMENTUM — on time but fading (momentum below the healthy
-//                      band), ranked coldest first.
-//    LATEST          — the most recent interactions, for review.
+//    (card)     set closeness for imported people, when any are unset
+//    TODAY      up to five people from AttentionEngine, ticked off as you go
+//    MORE       everyone else the engine would suggest, collapsed
+//    COMING UP  birthdays and anniversaries in the next two weeks
+//    LATEST     the most recent logs
 //
 
 import SwiftUI
 import SwiftData
 
 struct TodayView: View {
+    @Environment(OrbitStore.self) private var store
+    @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var modelContext
-    @Environment(SpotlightIndexer.self) private var spotlightIndexer
 
     @Binding var selectedContact: Contact?
 
     @Query(filter: #Predicate<Contact> { !$0.isArchived }, sort: \Contact.name)
     private var contacts: [Contact]
 
-    @Query(
-        filter: #Predicate<Interaction> { !$0.isDeleted },
-        sort: \Interaction.date,
-        order: .reverse
-    )
+    @Query(filter: #Predicate<Interaction> { !$0.isDeleted }, sort: \Interaction.date, order: .reverse)
     private var allInteractions: [Interaction]
 
-    private let dateGutterWidth: CGFloat = 52
+    @AppStorage("today.picks.day") private var picksDay = ""
+    @AppStorage("today.picks.ids") private var picksIDs = ""
+    @State private var showMore = false
 
-    // MARK: - Computed Data
+    private let dailyCount = 5
 
-    /// Drifting contacts, most urgent first. driftPriority weights how far
-    /// past cadence by how close the orbit — this is its first consumer.
-    private var needsAttention: [Contact] {
-        contacts.filter(\.isDrifting).sorted { $0.driftPriority > $1.driftPriority }
+    // MARK: - Data
+
+    private var ranked: [AttentionItem] {
+        AttentionEngine.ranked(contacts.map(\.attentionInput), now: Date())
     }
 
-    /// On time but fading, coldest first.
-    private var losingMomentum: [Contact] {
-        contacts.filter(\.isSlipping).sorted { $0.cachedMomentum < $1.cachedMomentum }
+    private var picks: [Contact] {
+        let ids = picksIDs.split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+        let byID = Dictionary(contacts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return ids.compactMap { byID[$0] }
+    }
+
+    private var more: [(Contact, AttentionItem)] {
+        let pickIDs = Set(picks.map(\.id))
+        let byID = Dictionary(contacts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return ranked.compactMap { item in
+            guard !pickIDs.contains(item.id), let c = byID[item.id] else { return nil }
+            return (c, item)
+        }
+    }
+
+    private var unconfirmedCount: Int {
+        contacts.filter { !$0.closenessConfirmed && $0.cachedInteractionCount == 0 && $0.targetOrbit < 4 }.count
+    }
+
+    private var upcoming: [(Contact, Artifact, Int)] {
+        var result: [(Contact, Artifact, Int)] = []
+        for contact in contacts {
+            for fact in contact.artifacts ?? [] {
+                guard let date = fact.dateValue, let days = Birthdays.daysUntil(date, from: Date()), days <= 14 else { continue }
+                result.append((contact, fact, days))
+            }
+        }
+        return result.sorted { $0.2 < $1.2 }
     }
 
     private var latest: [InteractionGroup] {
-        InteractionGroup.group(Array(allInteractions.prefix(24))).prefix(5).map { $0 }
+        Array(InteractionGroup.group(Array(allInteractions.prefix(24))).prefix(5))
+    }
+
+    private func isDone(_ c: Contact) -> Bool {
+        c.lastContactDate.map { Calendar.current.isDateInToday($0) } ?? false
+    }
+
+    private var remainingCount: Int {
+        picks.filter { !isDone($0) && !$0.isSnoozed }.count
     }
 
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+        List {
+            Section {
                 masthead
-                    .padding(.top, OrbitSpacing.lg)
-                    .padding(.bottom, OrbitSpacing.xl)
-
-                if !needsAttention.isEmpty {
-                    attentionSection
-                }
-                if !losingMomentum.isEmpty {
-                    momentumSection
-                }
-                if !latest.isEmpty {
-                    latestSection
+                    .listRowSeparator(.hidden)
+                if unconfirmedCount > 0 {
+                    closenessCard
+                        .listRowSeparator(.hidden)
                 }
             }
-            .padding(.horizontal, OrbitSpacing.lg)
-            .padding(.bottom, OrbitSpacing.xxxl)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !picks.isEmpty {
+                Section {
+                    ForEach(picks) { contact in
+                        pickRow(contact)
+                    }
+                } header: {
+                    sectionHeader("TODAY", trailing: remainingCount > 0 ? "\(remainingCount) left" : "done")
+                }
+            }
+
+            if !more.isEmpty {
+                Section {
+                    if showMore {
+                        ForEach(more, id: \.0.id) { pair in
+                            suggestionRow(pair.0, reason: pair.1.reason)
+                        }
+                    }
+                    Button(showMore ? "Show less" : "\(more.count) more could use a hello") {
+                        withAnimation { showMore.toggle() }
+                    }
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
+                } header: {
+                    sectionHeader("MORE", trailing: nil)
+                }
+            }
+
+            if !upcoming.isEmpty {
+                Section {
+                    ForEach(upcoming, id: \.1.id) { entry in
+                        upcomingRow(entry.0, fact: entry.1, days: entry.2)
+                    }
+                } header: {
+                    sectionHeader("COMING UP", trailing: nil)
+                }
+            }
+
+            if !latest.isEmpty {
+                Section {
+                    ForEach(latest) { group in
+                        latestRow(group)
+                    }
+                } header: {
+                    sectionHeader("LATEST", trailing: nil)
+                }
+            }
         }
-        .background(OrbitColors.commandBackground.ignoresSafeArea())
+        .listStyle(.plain)
         .navigationTitle("Today")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .onAppear {
-            MomentumEngine.recomputeAll(in: modelContext)
+        .onAppear(perform: refreshPicks)
+        .onChange(of: contacts.count) { _, _ in refreshPicks() }
+    }
+
+    private func refreshPicks() {
+        let previousIDs = picksIDs.split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+        let previous = picksDay.isEmpty ? nil : AttentionEngine.DailyPicks(day: picksDay, ids: previousIDs)
+        let next = AttentionEngine.dailyPicks(ranked: ranked, previous: previous, now: Date(), count: dailyCount)
+        if next.day != picksDay || next.ids != previousIDs {
+            picksDay = next.day
+            picksIDs = next.ids.map(\.uuidString).joined(separator: ",")
         }
     }
 
@@ -99,183 +169,186 @@ struct TodayView: View {
     private var masthead: some View {
         VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
             Text(Date().formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                .font(.system(size: 28, weight: .semibold, design: .default))
-
+                .font(.system(size: 28, weight: .semibold))
             Text(statusSentence)
                 .font(OrbitTypography.body)
-                .foregroundStyle(needsAttention.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                .foregroundStyle(.secondary)
         }
+        .padding(.vertical, OrbitSpacing.md)
     }
 
     private var statusSentence: String {
-        guard !contacts.isEmpty else {
-            return "No contacts yet — open the command palette to add one."
+        if contacts.isEmpty {
+            return "Add a few people, then log when you're in touch. Orbit will suggest who to reach out to."
         }
-        var clauses: [String] = []
-        if !needsAttention.isEmpty {
-            clauses.append("\(needsAttention.count) of \(contacts.count) contacts need attention")
-        } else {
-            clauses.append("Everyone is on cadence")
+        if picks.isEmpty {
+            return "No one needs a nudge today."
         }
-        if !losingMomentum.isEmpty {
-            clauses.append("\(losingMomentum.count) losing momentum")
-        }
-        return clauses.joined(separator: " — ") + "."
-    }
-
-    // MARK: - Needs Attention
-
-    private var attentionSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionRule(label: "NEEDS ATTENTION") {
-                Text("\(needsAttention.count)")
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(.quaternary)
-            }
-
-            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                ForEach(needsAttention) { contact in
-                    attentionRow(contact)
-                }
-            }
-            .padding(.top, OrbitSpacing.md)
-            .padding(.bottom, OrbitSpacing.xl)
+        switch remainingCount {
+        case 0: return "You're caught up for today."
+        case 1: return "One person to reach out to today."
+        default: return "\(remainingCount) people to reach out to today."
         }
     }
 
-    private func attentionRow(_ contact: Contact) -> some View {
-        contactRow(contact) {
-            Text(attentionLine(for: contact))
+    private var closenessCard: some View {
+        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
+            Text("\(unconfirmedCount) \(unconfirmedCount == 1 ? "person has" : "people have") no closeness set")
+                .font(OrbitTypography.bodyMedium)
+            Text("Choose how often you'd like to be in touch with the people who matter, and Orbit will remind you. Everyone else stays quiet.")
                 .font(OrbitTypography.caption)
-                .foregroundStyle(contact.driftColor)
+                .foregroundStyle(.secondary)
+            Button("Set closeness") { router.showClosenessReview = true }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
         }
+        .padding(OrbitSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.bottom, OrbitSpacing.sm)
     }
 
-    private func attentionLine(for contact: Contact) -> String {
-        guard let days = contact.daysSinceLastContact else {
-            return "Never contacted — \(contact.orbitZoneName.lowercased()) expects \(cadenceWord(for: contact)) contact."
-        }
-        let over = days - contact.cadenceThreshold
-        return "\(over) day\(over == 1 ? "" : "s") past the \(cadenceWord(for: contact)) cadence for \(contact.orbitZoneName.lowercased())."
-    }
+    // MARK: - Rows
 
-    private func cadenceWord(for contact: Contact) -> String {
-        switch contact.cadenceThreshold {
-        case 7: return "weekly"
-        case 30: return "monthly"
-        case 90: return "quarterly"
-        case 365: return "yearly"
-        default: return "expected"
-        }
-    }
+    private func pickRow(_ contact: Contact) -> some View {
+        let done = isDone(contact)
+        let snoozed = contact.isSnoozed
+        let reason: String = {
+            if done { return "Logged today" }
+            if snoozed, let until = contact.snoozedUntil { return "Snoozed until \(until.formatted(.dateTime.day().month(.abbreviated)))" }
+            return contact.attentionReason ?? "On track now"
+        }()
 
-    // MARK: - Losing Momentum
+        return HStack(alignment: .center, spacing: OrbitSpacing.md) {
+            Image(systemName: done ? "checkmark.circle.fill" : (snoozed ? "moon.zzz" : "circle"))
+                .foregroundStyle(done ? AnyShapeStyle(OrbitColors.success) : AnyShapeStyle(.tertiary))
+                .font(.title3)
 
-    private var momentumSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionRule(label: "LOSING MOMENTUM") {
-                Text("\(losingMomentum.count)")
-                    .font(OrbitTypography.footnote)
-                    .foregroundStyle(.quaternary)
-            }
-
-            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                ForEach(losingMomentum) { contact in
-                    momentumRow(contact)
-                }
-            }
-            .padding(.top, OrbitSpacing.md)
-            .padding(.bottom, OrbitSpacing.xl)
-        }
-    }
-
-    private func momentumRow(_ contact: Contact) -> some View {
-        contactRow(contact) {
-            Text(momentumLine(for: contact))
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    private func momentumLine(for contact: Contact) -> String {
-        var line = String(format: "momentum %.1f", contact.cachedMomentum)
-        if contact.cachedCadenceDays > 0 {
-            let usual = Int(contact.cachedCadenceDays.rounded())
-            line += " · usually every \(usual) day\(usual == 1 ? "" : "s")"
-            if let days = contact.daysSinceLastContact, days > usual {
-                line += ", now \(days)"
-            }
-        }
-        return line
-    }
-
-    // MARK: - Shared Contact Row
-    // Name weight encodes momentum (Phase 3), opacity encodes recency.
-    // Tap opens the contact; long-press logs without leaving the page.
-
-    private func contactRow<Detail: View>(_ contact: Contact, @ViewBuilder detail: () -> Detail) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(contact.name)
-                    .font(OrbitTypography.contactName(momentum: contact.cachedMomentum))
-                    .opacity(OrbitTypography.opacityForRecency(daysSinceContact: contact.daysSinceLastContact))
-                detail()
+                    .font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                    .foregroundStyle(done || snoozed ? .secondary : .primary)
+                Text(reason)
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(.secondary)
             }
+            .contentShape(Rectangle())
+            .onTapGesture { selectedContact = contact }
 
-            Spacer(minLength: OrbitSpacing.md)
+            Spacer(minLength: OrbitSpacing.sm)
 
-            Text(contact.recencyDescription)
-                .font(OrbitTypography.caption)
-                .foregroundStyle(.tertiary)
+            if !done {
+                Button("Log") { router.log([contact]) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            rowMenu(contact)
+        }
+        .padding(.vertical, OrbitSpacing.xs)
+        .swipeActions(edge: .leading) {
+            Button { router.log([contact]) } label: { Label("Log", systemImage: "plus.bubble") }
+                .tint(.accentColor)
+        }
+        .swipeActions(edge: .trailing) {
+            Button { snooze(contact, days: 7) } label: { Label("Snooze", systemImage: "moon.zzz") }
+                .tint(.indigo)
+        }
+    }
+
+    private func suggestionRow(_ contact: Contact, reason: String) -> some View {
+        HStack(spacing: OrbitSpacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(contact.name).font(OrbitTypography.contactName(orbit: contact.targetOrbit))
+                Text(reason).font(OrbitTypography.caption).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { selectedContact = contact }
+            Spacer()
+            rowMenu(contact)
+        }
+        .swipeActions(edge: .leading) {
+            Button { router.log([contact]) } label: { Label("Log", systemImage: "plus.bubble") }
+                .tint(.accentColor)
+        }
+        .swipeActions(edge: .trailing) {
+            Button { snooze(contact, days: 7) } label: { Label("Snooze", systemImage: "moon.zzz") }
+                .tint(.indigo)
+        }
+    }
+
+    private func rowMenu(_ contact: Contact) -> some View {
+        Menu {
+            Section("Quick log") {
+                ForEach(store.actionSuggestions(limit: 3), id: \.self) { action in
+                    Button(action) { store.log(contacts: [contact], action: action) }
+                }
+                Button("Log with details…", systemImage: "square.and.pencil") { router.log([contact]) }
+            }
+            Section("Snooze") {
+                Button("For a week") { snooze(contact, days: 7) }
+                Button("For a month") { snooze(contact, days: 30) }
+                Button("For three months") { snooze(contact, days: 90) }
+                if contact.isSnoozed {
+                    Button("Unsnooze") { store.snooze([contact], until: nil) }
+                }
+            }
+            Menu("Closeness") {
+                ForEach(OrbitZone.allZones, id: \.id) { zone in
+                    Button {
+                        store.setCloseness(zone.id, for: [contact])
+                    } label: {
+                        if zone.id == contact.targetOrbit {
+                            Label("\(zone.name) · \(AttentionEngine.cadenceWord(forOrbit: zone.id))", systemImage: "checkmark")
+                        } else {
+                            Text("\(zone.name) · \(AttentionEngine.cadenceWord(forOrbit: zone.id))")
+                        }
+                    }
+                }
+            }
+            Button("Open", systemImage: "arrow.right") { selectedContact = contact }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .accessibilityLabel("More for \(contact.name)")
+    }
+
+    private func snooze(_ contact: Contact, days: Int) {
+        let until = Calendar.current.date(byAdding: .day, value: days, to: Calendar.current.startOfDay(for: Date()))
+        store.snooze([contact], until: until)
+    }
+
+    private func upcomingRow(_ contact: Contact, fact: Artifact, days: Int) -> some View {
+        HStack(spacing: OrbitSpacing.md) {
+            Image(systemName: "gift").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(contact.name)'s \(fact.key.lowercased())")
+                    .font(OrbitTypography.body)
+                Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "In \(days) days")
+                    .font(OrbitTypography.caption)
+                    .foregroundStyle(days <= 1 ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            }
+            Spacer()
+            Button("Log") { router.log([contact]) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
         .contentShape(Rectangle())
         .onTapGesture { selectedContact = contact }
-        .contextMenu {
-            Section("Quick Log") {
-                Button("Call", systemImage: "phone") { quickLog(contact: contact, impulse: "Call") }
-                Button("Text", systemImage: "message") { quickLog(contact: contact, impulse: "Text") }
-                Button("Coffee", systemImage: "cup.and.saucer") { quickLog(contact: contact, impulse: "Coffee") }
-            }
-            Button("Open", systemImage: "arrow.right") { selectedContact = contact }
-        }
-    }
-
-    private func quickLog(contact: Contact, impulse: String) {
-        let interaction = Interaction(impulse: impulse, date: Date())
-        interaction.contact = contact
-        modelContext.insert(interaction)
-        contact.refreshCachedFields()
-        spotlightIndexer.index(contact: contact)
-        try? modelContext.save()
-    }
-
-    // MARK: - Latest
-
-    private var latestSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionRule(label: "LATEST") {
-                EmptyView()
-            }
-
-            VStack(alignment: .leading, spacing: OrbitSpacing.md) {
-                ForEach(latest) { group in
-                    latestRow(group)
-                }
-            }
-            .padding(.top, OrbitSpacing.md)
-        }
     }
 
     private func latestRow(_ group: InteractionGroup) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: OrbitSpacing.md) {
             Text(group.date.formatted(.dateTime.day().month(.abbreviated)))
                 .font(OrbitTypography.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .frame(width: dateGutterWidth, alignment: .leading)
-
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
-                Text(latestHeadline(for: group))
-                    .font(OrbitTypography.body)
+                Text(latestHeadline(for: group)).font(OrbitTypography.body)
                 if !group.content.isEmpty {
                     Text(group.content)
                         .font(OrbitTypography.caption)
@@ -283,39 +356,36 @@ struct TodayView: View {
                         .lineLimit(2)
                 }
             }
-
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if let contact = group.contacts.first {
-                selectedContact = contact
-            }
+            if let contact = group.contacts.first { selectedContact = contact }
+        }
+        .swipeActions(edge: .trailing) {
+            Button { router.edit(group.representative) } label: { Label("Edit", systemImage: "pencil") }
         }
     }
 
     private func latestHeadline(for group: InteractionGroup) -> String {
         let names: String
         if group.isGroup {
-            names = group.mutualConstellationName.map { "✦ \($0)" } ?? "\(group.contacts.count) contacts"
+            names = group.mutualConstellationName.map { "✦ \($0)" } ?? "\(group.contacts.count) people"
         } else {
             names = group.contacts.first?.name ?? "—"
         }
         return "\(group.impulse) with \(names)"
     }
 
-    // MARK: - Section Rule
-
-    private func sectionRule<Trailing: View>(label: String, @ViewBuilder trailing: () -> Trailing) -> some View {
-        VStack(alignment: .leading, spacing: OrbitSpacing.sm) {
-            Divider()
-            HStack {
-                Text(label)
-                    .font(OrbitTypography.captionMedium)
-                    .tracking(2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                trailing()
+    private func sectionHeader(_ label: String, trailing: String?) -> some View {
+        HStack {
+            Text(label)
+                .font(OrbitTypography.captionMedium)
+                .tracking(2)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let trailing {
+                Text(trailing).font(OrbitTypography.footnote).foregroundStyle(.secondary)
             }
         }
     }

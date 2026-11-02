@@ -115,6 +115,7 @@ enum MomentumEngine {
         guard let contacts = try? context.fetch(descriptor) else { return }
         for contact in contacts {
             contact.recomputeMomentum()
+            if contact.searchText.isEmpty { contact.refreshSearchText() }
         }
         try? context.save()
     }

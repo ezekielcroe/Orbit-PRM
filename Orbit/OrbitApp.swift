@@ -9,9 +9,10 @@ import CoreSpotlight
 @main
 struct OrbitApp: App {
     let container: ModelContainer
-    let commandExecutor = CommandExecutor()
     let spotlightIndexer = SpotlightIndexer()
     let dataValidator = DataValidator()
+    let store: OrbitStore
+    let router = AppRouter()
 
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
     @AppStorage("appTint") private var appTint: AppTint = .blue
@@ -61,6 +62,7 @@ struct OrbitApp: App {
 
         self.isRecoveryMode = recoveryMode
         self._isRecoveryBannerVisible = State(initialValue: recoveryMode)
+        self.store = OrbitStore(context: container.mainContext, spotlight: spotlightIndexer)
     }
 
     var body: some Scene {
@@ -68,7 +70,8 @@ struct OrbitApp: App {
         WindowGroup {
             VStack(spacing: 0) {
                 ContentView(spotlightContactID: $spotlightContactID)
-                    .environment(commandExecutor)
+                    .environment(store)
+                    .environment(router)
                     .environment(spotlightIndexer)
                     .environment(dataValidator)
                     .preferredColorScheme(appTheme.colorScheme)
@@ -92,6 +95,8 @@ struct OrbitApp: App {
         Settings {
             SettingsView()
                 .modelContainer(container)
+                .environment(store)
+                .environment(router)
                 .environment(dataValidator)
                 .environment(spotlightIndexer)
                 .preferredColorScheme(appTheme.colorScheme)
@@ -102,7 +107,8 @@ struct OrbitApp: App {
         WindowGroup {
             VStack(spacing: 0) {
                 ContentView(spotlightContactID: $spotlightContactID)
-                    .environment(commandExecutor)
+                    .environment(store)
+                    .environment(router)
                     .environment(spotlightIndexer)
                     .environment(dataValidator)
                     .preferredColorScheme(appTheme.colorScheme)
