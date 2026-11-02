@@ -10,13 +10,14 @@ struct ContentView: View {
 
     // 1. ADD: interactions to NavTab
     enum NavTab: Hashable {
+        case today
         case people
         case constellations
         case interactions
         case settings
     }
     
-    @State private var selectedTab: NavTab = .people
+    @State private var selectedTab: NavTab = .today
     @State private var selectedContact: Contact?
     @State private var selectedConstellation: Constellation?
     
@@ -28,6 +29,8 @@ struct ContentView: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
+
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -64,6 +67,17 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { _ in
             showCommandPalette = true
         }
+        // Momentum decays with the passage of time, not just with writes:
+        // recompute all cached momentum values at launch and whenever the
+        // app returns to the foreground.
+        .task {
+            MomentumEngine.recomputeAll(in: modelContext)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                MomentumEngine.recomputeAll(in: modelContext)
+            }
+        }
         // 3. FIX: Handle Apple Spotlight deep links
         .onChange(of: spotlightContactID) { _, newID in
             if let id = newID {
@@ -86,6 +100,9 @@ struct ContentView: View {
                 set: { if let newTab = $0 { selectedTab = newTab } }
             )) {
                 Section("Library") {
+                    NavigationLink(value: NavTab.today) {
+                        Label("Today", systemImage: "sun.max")
+                    }
                     NavigationLink(value: NavTab.people) {
                         Label("People", systemImage: "person.2")
                     }
@@ -109,6 +126,10 @@ struct ContentView: View {
         } content: {
             // 2. Middle Content Column
             switch selectedTab {
+            case .today:
+                TodayView(selectedContact: $selectedContact)
+                    .navigationSplitViewColumnWidth(min: 250, ideal: 340)
+
             case .people:
                 PeopleView(
                     selectedContact: $selectedContact,
@@ -133,14 +154,14 @@ struct ContentView: View {
         } detail: {
             // 3. Detail Column
             switch selectedTab {
-            case .people, .interactions: // 4. ADD: .interactions shares People's detail view (the contact)
+            case .today, .people, .interactions: // Today and Activity share People's detail view (the contact)
                 if let contact = selectedContact {
                     ContactDetailView(contact: contact)
                 } else {
                     ContentUnavailableView(
-                        selectedTab == .people ? "Select a Contact" : "Select an Interaction",
-                        systemImage: selectedTab == .people ? "person.crop.circle" : "text.bubble",
-                        description: Text(selectedTab == .people ? "Choose someone from the list to view their details." : "Choose an interaction to view the contact's details.")
+                        "Select a Contact",
+                        systemImage: selectedTab == .interactions ? "text.bubble" : "person.crop.circle",
+                        description: Text(selectedTab == .interactions ? "Choose an interaction to view the contact's details." : "Choose someone from the list to view their details.")
                     )
                 }
                 
@@ -169,7 +190,17 @@ struct ContentView: View {
     // MARK: - iOS Layout (Tab Bar)
     private var mobileTabLayout: some View {
         TabView(selection: $selectedTab) {
-            
+
+            // Today Tab
+            NavigationStack {
+                TodayView(selectedContact: $selectedContact)
+                    .navigationDestination(item: $selectedContact) { contact in
+                        ContactDetailView(contact: contact)
+                    }
+            }
+            .tabItem { Label("Today", systemImage: "sun.max") }
+            .tag(NavTab.today)
+
             // People Tab
             NavigationStack {
                 PeopleView(

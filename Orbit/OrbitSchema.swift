@@ -29,6 +29,9 @@ final class Contact {
     var isArchived: Bool = false
 
     // Phase 3 Foundations
+    // cachedMomentum and cachedCadenceDays are computed by recomputeMomentum()
+    // (Helpers/Momentum.swift) on every refreshCachedFields() and on app
+    // launch/foreground. gravityScore remains a reserved user-tunable field.
     var targetOrbit: Int = 2
     var gravityScore: Double = 5.0
     var cachedMomentum: Double = 0.0
@@ -128,7 +131,10 @@ final class Contact {
         // 4. Artifact presence
         cachedHasArtifacts = !(artifacts ?? []).isEmpty
 
-        // 5. Timestamp
+        // 5. Momentum + observed cadence (implemented in Helpers/Momentum.swift)
+        recomputeMomentum(using: active)
+
+        // 6. Timestamp
         modifiedAt = Date()
     }
 
