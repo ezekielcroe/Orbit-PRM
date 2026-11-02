@@ -68,6 +68,7 @@ struct OrbitExporter {
                 "targetOrbitName": contact.orbitZoneName,
                 "isArchived": contact.isArchived,
                 "closenessConfirmed": contact.closenessConfirmed,
+                "aliases": contact.aliasList,
                 "createdAt": isoFormatter.string(from: contact.createdAt),
                 "modifiedAt": isoFormatter.string(from: contact.modifiedAt),
             ]

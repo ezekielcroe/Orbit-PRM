@@ -20,11 +20,13 @@ struct TutorialView: View {
                           "Each day Orbit picks up to five people to reach out to, and says why — for example “You used to talk every 2 weeks — it's been 6.” Log, snooze or change closeness right from the row. The list stays the same all day so you can work through it.")
 
                     topic("Logging", icon: "text.cursor",
-                          "Tap \(Image(systemName: "square.and.pencil")) or press ⌘K and type what happened in plain words. Orbit shows who, what, when and the note it picked out before saving. If a name matches more than one person, pick the right one. If it matches no one, Orbit offers to add them.")
+                          "Open the Log tab (⌘K on iPad and Mac) and type what happened in plain words. Orbit shows who, what, when and the note before saving. Anything after “about” is the note. Say “my sister” or “my siblings” once you've set a relationship fact, or just pick the person when asked — Orbit remembers. On devices with Apple Intelligence, Re-read asks the on-device model for a second opinion.")
                     examples([
                         "Coffee with Sarah yesterday, talked about her move",
                         "Called Mum about her surgery #health",
                         "Dinner with the Book Club on Friday",
+                        "Sarah's birthday is 3 March",
+                        "Tom works at Google",
                     ])
 
                     topic("Closeness", icon: "circle.dotted",

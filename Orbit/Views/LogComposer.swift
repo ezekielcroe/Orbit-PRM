@@ -269,6 +269,7 @@ struct PersonChip: View {
 struct ContactPickerSheet: View {
     @Binding var selection: [Contact]
     var allowsMultiple: Bool = true
+    var title: String = "Choose people"
 
     @Environment(\.dismiss) private var dismiss
     @Query(filter: #Predicate<Contact> { !$0.isArchived }, sort: \Contact.name) private var contacts: [Contact]
@@ -301,7 +302,7 @@ struct ContactPickerSheet: View {
                 .buttonStyle(.plain)
             }
             .searchable(text: $search, prompt: "Search people")
-            .navigationTitle("Choose people")
+            .navigationTitle(title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

@@ -16,6 +16,7 @@ struct ContactFormSheet: View {
     @State private var name: String = ""
     @State private var notes: String = ""
     @State private var targetOrbit: Int = 2
+    @State private var aliasesText: String = ""
     @State private var validationIssues: [DataValidator.ValidationIssue] = []
     @State private var nameCheckTask: Task<Void, Never>?
 
@@ -37,6 +38,7 @@ struct ContactFormSheet: View {
             _name = State(initialValue: contact.name)
             _notes = State(initialValue: contact.notes)
             _targetOrbit = State(initialValue: contact.targetOrbit)
+            _aliasesText = State(initialValue: contact.aliases)
         }
     }
 
@@ -46,6 +48,7 @@ struct ContactFormSheet: View {
                 nameSection
                 orbitSection
                 notesSection
+                aliasesSection
 
                 if !validationIssues.isEmpty {
                     validationSection
@@ -130,6 +133,20 @@ struct ContactFormSheet: View {
         }
     }
 
+    private var aliasesSection: some View {
+        Section {
+            TextField("e.g. Mama, Mum", text: $aliasesText)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+        } header: {
+            Text("Also known as")
+        } footer: {
+            Text("Other names you use for this person when logging. Orbit adds these itself when you correct it in Log.")
+        }
+    }
+
     private var validationSection: some View {
         Section {
             ForEach(validationIssues) { issue in
@@ -183,13 +200,22 @@ struct ContactFormSheet: View {
 
     private func save() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let aliases = aliasesText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         switch mode {
         case .add:
-            // Choosing a closeness in the form counts as confirming it.
-            let contact = store.createContact(name: trimmedName, orbit: targetOrbit, notes: notes, closenessConfirmed: true)
-            onSave?(contact)
+            var created: Contact?
+            store.grouped("Add \(trimmedName)", message: "Added \(trimmedName)") {
+                // Choosing a closeness in the form counts as confirming it.
+                let contact = store.createContact(name: trimmedName, orbit: targetOrbit, notes: notes, closenessConfirmed: true)
+                if !aliases.isEmpty { store.setAliases(aliases, for: contact) }
+                created = contact
+            }
+            if let created { onSave?(created) }
         case .edit(let contact):
-            store.updateContact(contact, name: trimmedName, notes: notes, orbit: targetOrbit)
+            store.grouped("Edit \(trimmedName)", message: "Saved \(trimmedName)") {
+                store.updateContact(contact, name: trimmedName, notes: notes, orbit: targetOrbit)
+                if aliases.map({ $0.lowercased() }) != contact.aliasList { store.setAliases(aliases, for: contact) }
+            }
             onSave?(contact)
         }
     }

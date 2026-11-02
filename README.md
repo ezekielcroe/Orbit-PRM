@@ -36,7 +36,9 @@ Orbit models your relationships as a solar system. The people closest to you liv
 ## Core Features
 
 * **☀️ Today:** Up to five people to reach out to each day, chosen once so the list doesn't reshuffle while you work through it. Each row says why in plain words ("You used to talk every 2 weeks — it's been 6") and has visible Log, Snooze and Closeness actions. Birthdays and anniversaries from your facts show up under *Coming up*.
-* **✍️ Log in plain words (`⌘K`):** Type `Coffee with Sarah yesterday, talked about her move` and Orbit shows who, what, when and the note before saving. Ambiguous names get a picker, unknown names can be created on the spot, and the palette stays open so you can log several things in a row.
+* **✍️ Log tab — plain words, chat-style:** The second tab is a running history of everything you've logged with the composer docked at the bottom, next to the keyboard (`⌘K` opens the same composer on iPad and Mac). Type `Texted my siblings about Mama going overseas` and Orbit shows who, what, when and the note before saving: anything after *about* is the note, *my siblings* finds your group (or everyone whose relationship is sister/brother), ambiguous names get a picker, unknown names can be created on the spot. Corrections are remembered as nicknames or relationship facts.
+* **🧠 Facts in plain words:** `Sarah's birthday is 3 March`, `Tom works at Google`, `Sam likes jazz`, `Jo has a dog called Rex`. Logs that mention a fact ("he's moving to Berlin") offer to save it too.
+* **✨ Re-read with Apple Intelligence (iOS 26 / macOS 26):** Optional second opinion from Apple's on-device model, checked against your real contacts and shown in the preview before anything is saved.
 * **↩️ Undo everywhere:** Every change shows a banner with Undo — logs, edits, facts, group membership, closeness, archive and snooze.
 * **🎯 Closeness:** Each person's orbit zone sets how often you'd like to be in touch. Imported people stay quiet until you set their closeness, so day one isn't a wall of 200 "overdue" contacts.
 * **✨ Groups:** Named groups of people (a team, a family, a book club). Log once for everyone.
@@ -107,7 +109,8 @@ Orbit uses a **Swiss/International Typographic Style** design system. The core p
 
 * **`OrbitStore`** (`Orbit/Store`) is the only place that writes data. Every write refreshes the affected contacts' cached fields and Spotlight entries, saves (surfacing errors as a banner), and registers an undo step.
 * **`AppRouter`** (`Orbit/Navigation`) holds the selected tab, one selection per tab, and the app-wide sheets (palette, log composer, new contact, onboarding).
-* **`Orbit/Core`** is pure Foundation and unit-tested: `DatePhraseParser`, `CaptureParser` / `NaturalLanguageParser`, the sigil `CommandParser`, `NameMatcher`, `ActionVocabulary`, `AttentionEngine` and `Birthdays`.
+* **`Orbit/Core`** is pure Foundation and unit-tested: `DatePhraseParser`, `CaptureParser` / `NaturalLanguageParser`, `FactParser`, `Relationships`, the sigil `CommandParser`, `NameMatcher`, `ActionVocabulary`, `AttentionEngine`, `Birthdays`, and the `CaptureReader` contract for Re-read.
+* **`CapturePanel`** is the capture UI, used docked in the Log tab and as the ⌘K sheet. `AppleIntelligenceReader` (compiled only when the SDK has FoundationModels) implements Re-read.
 * **`LogComposer`** is the single logging form used from every screen.
 
 ```text
@@ -121,11 +124,11 @@ Five SwiftData `@Model` entities. V2 adds fields only (all with defaults), so Sw
 
 | Entity | Purpose | V2 additions |
 | --- | --- | --- |
-| **Contact** | A person | `snoozedUntil`, `closenessConfirmed`, `searchText` |
+| **Contact** | A person | `snoozedUntil`, `closenessConfirmed`, `searchText`, `aliases` |
 | **Interaction** | A logged event | — |
 | **Artifact** | A fact | `dateValue` (parsed birthdays/anniversaries) |
 | **Tag** | Name registry for autocomplete | — |
-| **Constellation** | A group | — |
+| **Constellation** | A group | `aliases` |
 
 Model and property names stay as they are (CloudKit can't rename fields); the UI calls them people, logs, facts and groups. A one-time maintenance pass on first launch merges action spellings ("Text" → "Message"), lowercases tags and backfills the new fields.
 

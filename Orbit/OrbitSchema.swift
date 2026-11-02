@@ -64,6 +64,11 @@ final class Contact {
     /// Rebuilt by refreshCachedFields() / refreshArtifactCache().
     var searchText: String = ""
 
+    /// Learned phrases that mean this person in the palette ("mama", "my
+    /// siblings"), comma-separated, lowercase. Added when the user corrects
+    /// a guess; editable on the contact form.
+    var aliases: String = ""
+
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \Interaction.contact)
     var interactions: [Interaction]?
@@ -168,7 +173,7 @@ final class Contact {
 
     /// Rebuild `searchText`. Pass `tagNames` when already computed.
     func refreshSearchText(tagNames: [String]? = nil) {
-        var parts: [String] = [name, notes]
+        var parts: [String] = [name, notes, aliases]
         for artifact in artifacts ?? [] {
             parts.append(artifact.key)
             parts.append(contentsOf: artifact.listValues)
@@ -179,6 +184,30 @@ final class Contact {
             .filter { !$0.isEmpty }
             .joined(separator: " \u{1F} ")   // unit separator keeps fields from running together
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    var aliasList: [String] {
+        aliases.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+    }
+
+    func addAlias(_ phrase: String) {
+        let p = phrase.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !p.isEmpty, p != name.lowercased(), !aliasList.contains(p) else { return }
+        aliases = (aliasList + [p]).joined(separator: ", ")
+    }
+
+    /// Values of the "relationship" fact ("sister", "older brother").
+    var relationshipValues: [String] {
+        (artifacts ?? []).filter { Relationships.isRelationshipKey($0.key) }.flatMap(\.listValues)
+    }
+
+    /// What the palette parser needs to know about this person.
+    var personRef: PersonRef {
+        PersonRef(
+            name: name,
+            aliases: aliasList,
+            relationships: Set(relationshipValues.flatMap { Relationships.canonicalForms(inValue: $0) })
+        )
     }
 
     /// Search across name, notes, facts, tags and groups.
@@ -475,6 +504,9 @@ final class Constellation {
     var notes: String = ""
     var createdAt: Date = Date()
 
+    /// V2: learned phrases for this group ("the siblings", "fam"), comma-separated.
+    var aliases: String = ""
+
     @Relationship
     var contacts: [Contact]?
 
@@ -485,6 +517,20 @@ final class Constellation {
         self.notes = notes
         self.createdAt = Date()
     }
+}
+
+extension Constellation {
+    var aliasList: [String] {
+        aliases.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+    }
+
+    func addAlias(_ phrase: String) {
+        let p = phrase.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !p.isEmpty, p != name.lowercased(), !aliasList.contains(p) else { return }
+        aliases = (aliasList + [p]).joined(separator: ", ")
+    }
+
+    var groupRef: GroupRef { GroupRef(name: name, aliases: aliasList) }
 }
 
 extension Contact {

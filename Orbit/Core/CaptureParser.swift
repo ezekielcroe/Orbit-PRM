@@ -16,6 +16,8 @@ struct CaptureDraft: Equatable {
     var date: Date?
     var note: String = ""
     var tags: [String] = []
+    /// Facts spotted in the note ("she's moving to Berlin"). Offered, never auto-saved.
+    var suggestedFacts: [FactDraft] = []
 
     var hasTarget: Bool { !people.isEmpty || group != nil }
 }
@@ -24,6 +26,8 @@ struct CaptureDraft: Equatable {
 enum CaptureIntent: Equatable {
     case empty
     case log(CaptureDraft)
+    /// A plain-language fact statement ("Sarah's birthday is 3 March").
+    case facts([FactDraft])
     /// A sigil command that isn't a log (facts, groups, archive…).
     case command(ParsedCommand)
     case openGroup(String)
@@ -36,16 +40,30 @@ enum CaptureIntent: Equatable {
 // else is read as plain language.
 
 struct CaptureParser {
-    var people: [String] = []
-    var groups: [String] = []
-    var actions: [String] = []
-    var dates = DatePhraseParser()
+    var personRefs: [PersonRef]
+    var groupRefs: [GroupRef]
+    var actions: [String]
+    var dates: DatePhraseParser
+    /// Lowercased phrases the user said are *not* people or groups (they
+    /// removed them in the preview); those words stay in the note.
+    var ignoring: Set<String>
 
-    init(people: [String] = [], groups: [String] = [], actions: [String] = [], dates: DatePhraseParser = DatePhraseParser()) {
-        self.people = people
-        self.groups = groups
+    var people: [String] { personRefs.map(\.name) }
+
+    init(people: [String] = [], groups: [String] = [], actions: [String] = [],
+         dates: DatePhraseParser = DatePhraseParser(), ignoring: Set<String> = []) {
+        self.init(personRefs: people.map { PersonRef(name: $0) },
+                  groupRefs: groups.map { GroupRef(name: $0) },
+                  actions: actions, dates: dates, ignoring: ignoring)
+    }
+
+    init(personRefs: [PersonRef], groupRefs: [GroupRef], actions: [String] = [],
+         dates: DatePhraseParser = DatePhraseParser(), ignoring: Set<String> = []) {
+        self.personRefs = personRefs
+        self.groupRefs = groupRefs
         self.actions = actions
         self.dates = dates
+        self.ignoring = ignoring
     }
 
     func parse(_ text: String, now: Date = Date()) -> CaptureIntent {
@@ -53,7 +71,11 @@ struct CaptureParser {
         guard !trimmed.isEmpty else { return .empty }
 
         guard CommandParser.looksLikeSigilSyntax(trimmed) else {
-            return .log(naturalLanguage.parse(trimmed, now: now))
+            if let facts = FactParser(people: personRefs).parseStatement(trimmed),
+               !facts.contains(where: { ignoring.contains($0.person.lowercased()) }) {
+                return .facts(facts)
+            }
+            return .log(withSuggestions(naturalLanguage.parse(trimmed, now: now)))
         }
 
         let command = CommandParser(knownNames: people, dates: dates).parse(trimmed, now: now)
@@ -83,7 +105,7 @@ struct CaptureParser {
             // but the person is already decided.
             var draft = query.isEmpty ? CaptureDraft() : naturalLanguage.parse(query, now: now, findPeople: false)
             draft.people = [name]
-            return .log(draft)
+            return .log(withSuggestions(draft))
         case .searchConstellation(let name):
             return .openGroup(name)
         default:
@@ -92,7 +114,16 @@ struct CaptureParser {
     }
 
     private var naturalLanguage: NaturalLanguageParser {
-        NaturalLanguageParser(people: people, groups: groups, actions: actions, dates: dates)
+        NaturalLanguageParser(people: personRefs, groups: groupRefs, actions: actions, dates: dates, ignoring: ignoring)
+    }
+
+    /// Offer facts mentioned in the note when the log is about one person.
+    private func withSuggestions(_ draft: CaptureDraft) -> CaptureDraft {
+        var d = draft
+        if d.people.count == 1, d.group == nil, !d.note.isEmpty {
+            d.suggestedFacts = FactParser(people: personRefs).suggestions(inNote: d.note, person: d.people[0])
+        }
+        return d
     }
 }
 
@@ -106,10 +137,21 @@ struct CaptureParser {
 // nothing the user typed is thrown away.
 
 struct NaturalLanguageParser {
-    var people: [String]
-    var groups: [String]
+    var people: [PersonRef]
+    var groups: [GroupRef]
     var actions: [String]
     var dates: DatePhraseParser
+    var ignoring: Set<String> = []
+
+    private var names: [String] { people.map(\.name) }
+
+    /// Words that start the note: nothing after them is a person or group.
+    /// "Called Mum about her surgery" → who: Mum, note: "about her surgery".
+    private static let topicMarkers = [
+        "to talk about", "to check in on", "to check on", "to ask about", "to discuss", "to catch up on",
+        "about", "regarding", "concerning", "re:", "re", "because", "that", "to ask", "to tell", "to say",
+        "asking", "telling", "saying", "wishing",
+    ]
 
     private static let fillers: Set<String> = [
         "with", "and", "&", "had", "have", "a", "an", "the", "for", "i", "we", "just", "quick", "some",
@@ -138,24 +180,32 @@ struct NaturalLanguageParser {
             if let d = dates.resolveShorthand(s, now: now) { draft.date = d; break }
         }
 
-        // 3. Split header / body.
-        let (header, body) = splitHeader(working)
-        var head = header
+        // 3. Split header / body, then cut the header at a topic word.
+        let (header, rawBody) = splitHeader(working)
+        let (topicHead, topicBody) = splitAtTopic(header)
+        var head = topicHead
+        var body = [topicBody, rawBody.trimmingCharacters(in: .whitespacesAndNewlines)]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
 
-        // 4. When
+        // 4. When — in the header, or a date phrase that ends the sentence
+        //    ("Called Mum about her surgery yesterday").
         if draft.date == nil, let match = dates.firstMatch(in: head, now: now) {
             draft.date = match.date
             head.replaceSubrange(match.range, with: " ")
+        } else if draft.date == nil, !topicBody.isEmpty,
+                  rawBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let match = dates.firstMatch(in: body, now: now),
+                  match.range.lowerBound > body.startIndex,
+                  body[match.range.upperBound...].allSatisfy({ $0.isWhitespace || $0.isPunctuation }) {
+            // Only for a single run-on sentence; a date after a comma is part of the note.
+            draft.date = match.date
+            body = String(body[..<match.range.lowerBound])
+                .trimmingCharacters(in: CharacterSet(charactersIn: ", ").union(.whitespaces))
         }
 
-        // 5. Group ("dinner with Family")
-        for group in groups.sorted(by: { $0.count > $1.count }) {
-            if let r = Self.wholeWordRange(of: group, in: head) {
-                draft.group = group
-                head.replaceSubrange(r, with: " ")
-                break
-            }
-        }
+        // 5. Group ("dinner with Family", "texted my siblings")
+        draft.group = findGroup(in: &head)
 
         // 6. Who
         if findPeople {
@@ -176,8 +226,8 @@ struct NaturalLanguageParser {
 
         // 8. Just a name ("sarah", "connor") — nothing else typed.
         if findPeople, draft.people.isEmpty, draft.group == nil, !leftover.isEmpty,
-           leftover.split(separator: " ").count <= 3 {
-            let candidates = people.map { NameCandidate(id: UUID(), name: $0) }
+           leftover.split(separator: " ").count <= 3, !ignoring.contains(leftover.lowercased()) {
+            let candidates = names.map { NameCandidate(id: UUID(), name: $0) }
             if NameMatcher.match(leftover, in: candidates) != .none {
                 draft.people = [leftover]
                 leftover = ""
@@ -219,7 +269,7 @@ struct NaturalLanguageParser {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("and ") || lower.hasPrefix("& ") { return true }
-        for name in people {
+        for name in names {
             let n = name.lowercased()
             if lower.hasPrefix(n) { return true }
             if let first = n.split(separator: " ").first, lower.hasPrefix(first + " ") || lower == first || lower.hasPrefix(first + ",") {
@@ -246,10 +296,56 @@ struct NaturalLanguageParser {
             head.replaceSubrange(r, with: String(repeating: " ", count: head[r].count))
         }
 
+        func offset(_ r: Range<String.Index>) -> Int { head.distance(from: head.startIndex, to: r.lowerBound) }
+
+        // 0) "my sister", "our parents", "my siblings" — relationship words.
+        let kinAlternation = Relationships.allWords.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
+        if let regex = try? NSRegularExpression(pattern: "(?<![\\w])(?:my|our)\\s+(\(kinAlternation))(?![\\w])", options: [.caseInsensitive]) {
+            let ns = head as NSString
+            let matches = regex.matches(in: head, range: NSRange(location: 0, length: ns.length))
+            var kinRanges: [(Range<String.Index>, [String])] = []
+            for m in matches {
+                guard let r = Range(m.range, in: head) else { continue }
+                let phrase = String(head[r]).lowercased()
+                let term = ns.substring(with: m.range(at: 1)).lowercased()
+                guard !ignoring.contains(phrase) else { continue }
+                var matched: [String]
+                if let members = Relationships.pluralMembers(term) {
+                    matched = people.filter { !$0.relationships.isDisjoint(with: members) }.map(\.name)
+                } else if let canonical = Relationships.canonical(term) {
+                    matched = people.filter { $0.relationships.contains(canonical) }.map(\.name)
+                    if matched.count > 1 { matched = [] }   // ambiguous → let the resolver ask
+                } else {
+                    matched = []
+                }
+                matched = matched.filter { !ignoring.contains($0.lowercased()) }
+                kinRanges.append((r, matched.isEmpty ? [phrase] : matched))
+            }
+            for (r, entries) in kinRanges.reversed() {
+                let at = offset(r)
+                for (i, e) in entries.enumerated() { found.append((e, at + i)) }
+                blank(r)
+            }
+        }
+
+        // 0b) Learned aliases ("mama" → Margaret Yeo). One alias can cover
+        //     several people ("the twins").
+        var aliasMap: [String: [String]] = [:]
+        for p in people {
+            for a in p.aliases where !a.isEmpty { aliasMap[a.lowercased(), default: []].append(p.name) }
+        }
+        for (alias, aliasNames) in aliasMap.sorted(by: { $0.key.count > $1.key.count }) where !ignoring.contains(alias) {
+            while let r = Self.wholeWordRange(of: alias, in: head) {
+                let at = offset(r)
+                for (i, n) in aliasNames.enumerated() where !ignoring.contains(n.lowercased()) { found.append((n, at + i)) }
+                blank(r)
+            }
+        }
+
         // a) Full known names, longest first.
-        for name in people.sorted(by: { $0.count > $1.count }) {
+        for name in names.sorted(by: { $0.count > $1.count }) where !ignoring.contains(name.lowercased()) {
             while let r = Self.wholeWordRange(of: name, in: head) {
-                found.append((name, head.distance(from: head.startIndex, to: r.lowerBound)))
+                found.append((name, offset(r)))
                 blank(r)
             }
         }
@@ -257,8 +353,9 @@ struct NaturalLanguageParser {
         // b) Single words that are part of a known name ("Sam" → Sam Okafor),
         //    when capitalised or introduced by with/and/&/comma.
         // c) Unknown capitalised names introduced by with/and/&/comma ("with Jamie Lee").
-        let nameWords: Set<String> = Set(people.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
+        let nameWords: Set<String> = Set(names.flatMap { $0.lowercased().split(separator: " ").map(String.init) })
             .subtracting(Self.notNames)
+            .subtracting(ignoring)
         let words = Self.words(in: head)
         var toBlank: [Range<String.Index>] = []
         var i = 0
@@ -277,7 +374,7 @@ struct NaturalLanguageParser {
                 i += 1
                 continue
             }
-            if introduced && capitalised && !Self.notNames.contains(lower) && !Self.fillers.contains(lower) {
+            if introduced && capitalised && !Self.notNames.contains(lower) && !Self.fillers.contains(lower) && !ignoring.contains(lower) {
                 var parts = [word]
                 var last = range
                 var j = i + 1
@@ -304,6 +401,83 @@ struct NaturalLanguageParser {
             .sorted { $0.1 < $1.1 }
             .map(\.0)
             .filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    // MARK: Topic
+
+    /// "Texted my siblings about Mama going overseas" →
+    /// ("Texted my siblings", "about Mama going overseas").
+    private func splitAtTopic(_ header: String) -> (String, String) {
+        let alternation = Self.topicMarkers.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
+        guard let regex = try? NSRegularExpression(pattern: "(?<=\\S)\\s+(?:\(alternation))(?=\\s|$)", options: [.caseInsensitive]) else {
+            return (header, "")
+        }
+        let ns = header as NSString
+        guard let m = regex.firstMatch(in: header, range: NSRange(location: 0, length: ns.length)),
+              let r = Range(m.range, in: header) else { return (header, "") }
+        let head = String(header[..<r.lowerBound])
+        // Need something before the marker ("About time!" is not a topic split).
+        guard head.split(separator: " ").count >= 1 else { return (header, "") }
+        let topic = String(header[r.lowerBound...]).trimmingCharacters(in: .whitespaces)
+        return (head, topic)
+    }
+
+    // MARK: Groups
+
+    private static func stem(_ word: String) -> String {
+        var w = word.lowercased()
+        for suffix in ["'s", "’s"] where w.hasSuffix(suffix) { w.removeLast(2) }
+        if w.count > 3, w.hasSuffix("s") { w.removeLast() }
+        return w
+    }
+
+    /// Full name or alias anywhere in the header; otherwise a distinctive
+    /// word of the group's name after my/our/the/with/and ("my siblings" →
+    /// "Three Siblings"). Returns the group name, or the matched word when
+    /// several groups share it (the resolver then asks which).
+    private func findGroup(in head: inout String) -> String? {
+        var phrases: [(phrase: String, name: String)] = []
+        for g in groups {
+            phrases.append((g.name, g.name))
+            for a in g.aliases where !a.isEmpty { phrases.append((a, g.name)) }
+        }
+        for (phrase, name) in phrases.sorted(by: { $0.phrase.count > $1.phrase.count })
+        where !ignoring.contains(phrase.lowercased()) && !ignoring.contains(name.lowercased()) {
+            if let r = Self.wholeWordRange(of: phrase, in: head) {
+                head.replaceSubrange(r, with: String(repeating: " ", count: head[r].count))
+                return name
+            }
+        }
+
+        let personWords = Set(names.flatMap { $0.lowercased().split(separator: " ").map { Self.stem(String($0)) } })
+        var hits: [(name: String, keyword: String, range: Range<String.Index>)] = []
+        for g in groups where !ignoring.contains(g.name.lowercased()) {
+            for keyword in g.keywords {
+                let stemmed = Self.stem(keyword)
+                guard !personWords.contains(stemmed), !ignoring.contains(keyword), !ignoring.contains(stemmed) else { continue }
+                let pattern = "(?<![\\w])(?:my|our|the|with|and)\\s+" + NSRegularExpression.escapedPattern(for: stemmed) + "(?:s|es|['’]s)?(?![\\w])"
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+                let ns = head as NSString
+                if let m = regex.firstMatch(in: head, range: NSRange(location: 0, length: ns.length)),
+                   let r = Range(m.range, in: head) {
+                    hits.append((g.name, keyword, r))
+                }
+            }
+        }
+        guard let first = hits.first else { return nil }
+        let distinctGroups = Set(hits.map(\.name))
+        // Blank the matched phrase(s); keep the leading "with"/"and" out of the note anyway.
+        for h in hits.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
+            if head.indices.contains(h.range.lowerBound) {
+                head.replaceSubrange(h.range, with: String(repeating: " ", count: head[h.range].count))
+            }
+        }
+        if distinctGroups.count == 1 { return first.name }
+        // Prefer a group that matched more of its words.
+        let counts = Dictionary(grouping: hits, by: \.name).mapValues(\.count)
+        let best = counts.max { $0.value < $1.value }!
+        if counts.values.filter({ $0 == best.value }).count == 1 { return best.key }
+        return first.keyword
     }
 
     private func leadingActionBeforeWith(_ head: String) -> (word: String, range: Range<String.Index>)? {

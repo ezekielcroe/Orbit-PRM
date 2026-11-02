@@ -114,6 +114,9 @@ struct ContactDetailView: View {
 
     private var contextLine: String {
         var parts: [String] = []
+        let relationships = contact.relationshipValues
+        if !relationships.isEmpty { parts.append("Your " + relationships.joined(separator: ", ")) }
+        if !contact.aliasList.isEmpty { parts.append("aka " + contact.aliasList.joined(separator: ", ")) }
         let groups = (contact.constellations ?? []).map { "✦ \($0.name)" }
         if !groups.isEmpty { parts.append(groups.joined(separator: "  ")) }
         let tags = contact.aggregatedTags.prefix(8).map { "#\($0.name)" }
@@ -151,32 +154,30 @@ struct ContactDetailView: View {
 
     // MARK: - Actions
 
+    /// Three equal tiles, icon over label, like the Contacts app. Same size
+    /// on every device and never truncated.
     private var actionRow: some View {
         HStack(spacing: OrbitSpacing.sm) {
             Button { router.log([contact]) } label: {
-                Label("Log", systemImage: "plus.bubble")
+                ActionTile(title: "Log", systemImage: "square.and.pencil", prominent: true)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.borderless)
 
             Menu {
-                ForEach(store.actionSuggestions(limit: 4), id: \.self) { action in
+                ForEach(store.actionSuggestions(limit: 5), id: \.self) { action in
                     Button(action) { store.log(contacts: [contact], action: action) }
                 }
             } label: {
-                Label("Quick log", systemImage: "bolt")
+                ActionTile(title: "Quick log", systemImage: "bolt.fill")
             }
             .menuStyle(.button)
-            .buttonStyle(.bordered)
-            .fixedSize()
+            .buttonStyle(.borderless)
 
             Button { showAddFact = true } label: {
-                Label("Add fact", systemImage: "text.badge.plus")
+                ActionTile(title: "Add fact", systemImage: "text.badge.plus")
             }
-            .buttonStyle(.bordered)
-
-            Spacer(minLength: 0)
+            .buttonStyle(.borderless)
         }
-        .controlSize(.small)
         .padding(.vertical, OrbitSpacing.xs)
     }
 
@@ -421,7 +422,7 @@ struct ContactDetailView: View {
             }
             let k = artifact.key.lowercased()
             if ["email", "phone", "address", "city", "location", "website", "social", "instagram", "twitter", "linkedin", "github", "country"].contains(where: { k.contains($0) }) { return .contactInfo }
-            if ["birthday", "anniversary", "born", "dob", "spouse", "wife", "husband", "partner", "children", "kids", "likes", "dislikes", "hobbies", "interests", "allergies", "pronouns", "hometown", "zodiac", "nickname", "pet", "pets", "favorite", "favourite"].contains(where: { k.contains($0) }) { return .personal }
+            if ["birthday", "anniversary", "born", "dob", "spouse", "wife", "husband", "partner", "children", "kids", "likes", "dislikes", "hobbies", "interests", "allergies", "pronouns", "hometown", "zodiac", "nickname", "pet", "pets", "favorite", "favourite", "relationship", "relation"].contains(where: { k.contains($0) }) { return .personal }
             if ["company", "role", "title", "job", "department", "team", "met_at", "school", "university", "org", "organization", "industry"].contains(where: { k.contains($0) }) { return .professional }
             return .other
         }
@@ -457,5 +458,32 @@ struct ContactDetailView: View {
         let grouped = Dictionary(grouping: filteredInteractions) { $0.date.formatted(.dateTime.year().month(.wide)) }
         return grouped.map { (key: $0.key, interactions: $0.value) }
             .sorted { ($0.interactions.first?.date ?? .distantPast) > ($1.interactions.first?.date ?? .distantPast) }
+    }
+}
+
+// MARK: - ActionTile
+
+struct ActionTile: View {
+    let title: String
+    let systemImage: String
+    var prominent: Bool = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .medium))
+                .frame(height: 22)
+            Text(title)
+                .font(OrbitTypography.captionMedium)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(prominent ? Color.white : Color.accentColor)
+        .frame(maxWidth: .infinity, minHeight: 58)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(prominent ? Color.accentColor : Color.accentColor.opacity(0.12))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -27,13 +27,20 @@ struct ToastMessage: Identifiable, Equatable {
 
 enum ContactResolution: Equatable {
     case resolved(Contact)
+    /// More than one person fits; ask which.
     case ambiguous([Contact])
+    /// A phrase that means several people at once ("my siblings", a shared alias).
+    case several([Contact])
+    /// "my sister" when no contact has that relationship yet; ask who.
+    case unknownRelation(String)
     case notFound(String)
 
     static func == (lhs: ContactResolution, rhs: ContactResolution) -> Bool {
         switch (lhs, rhs) {
         case let (.resolved(a), .resolved(b)): return a.id == b.id
         case let (.ambiguous(a), .ambiguous(b)): return a.map(\.id) == b.map(\.id)
+        case let (.several(a), .several(b)): return a.map(\.id) == b.map(\.id)
+        case let (.unknownRelation(a), .unknownRelation(b)): return a == b
         case let (.notFound(a), .notFound(b)): return a == b
         default: return false
         }
@@ -144,8 +151,31 @@ final class OrbitStore {
         (try? context.fetch(FetchDescriptor<Constellation>(sortBy: [SortDescriptor(\.name)]))) ?? []
     }
 
+    /// Resolve a typed or parsed name. Order: learned alias → relationship
+    /// phrase ("my sister") → name matching.
     func resolveContact(_ name: String, includeArchived: Bool = false) -> ContactResolution {
         let contacts = activeContacts(includeArchived: includeArchived)
+        let phrase = name.trimmingCharacters(in: .whitespaces).lowercased()
+
+        let byAlias = contacts.filter { $0.aliasList.contains(phrase) }
+        if byAlias.count == 1 { return .resolved(byAlias[0]) }
+        if byAlias.count > 1 { return .several(byAlias) }
+
+        if let term = Self.relationshipTerm(in: phrase) {
+            if let members = Relationships.pluralMembers(term) {
+                let matched = contacts.filter { !$0.personRef.relationships.isDisjoint(with: members) }
+                return matched.isEmpty ? .unknownRelation(term) : .several(matched)
+            }
+            if let canonical = Relationships.canonical(term) {
+                let matched = contacts.filter { $0.personRef.relationships.contains(canonical) }
+                switch matched.count {
+                case 0: return .unknownRelation(term)
+                case 1: return .resolved(matched[0])
+                default: return .ambiguous(matched)
+                }
+            }
+        }
+
         let candidates = contacts.map { NameCandidate(id: $0.id, name: $0.name) }
         switch NameMatcher.match(name, in: candidates) {
         case .unique(let id):
@@ -157,8 +187,21 @@ final class OrbitStore {
         }
     }
 
+    /// "my sister" → "sister"; "our parents" → "parents". nil otherwise.
+    static func relationshipTerm(in phrase: String) -> String? {
+        let lower = phrase.lowercased()
+        for prefix in ["my ", "our "] where lower.hasPrefix(prefix) {
+            let term = String(lower.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            if Relationships.canonical(term) != nil || Relationships.pluralMembers(term) != nil { return term }
+        }
+        return nil
+    }
+
     func resolveGroup(_ name: String) -> GroupResolution {
         let groups = allGroups()
+        let phrase = name.trimmingCharacters(in: .whitespaces).lowercased()
+        let byAlias = groups.filter { $0.aliasList.contains(phrase) }
+        if byAlias.count == 1 { return .resolved(byAlias[0]) }
         let candidates = groups.map { NameCandidate(id: $0.id, name: $0.name) }
         switch NameMatcher.match(name, in: candidates) {
         case .unique(let id):
@@ -166,7 +209,64 @@ final class OrbitStore {
         case .ambiguous(let ids):
             return .ambiguous(groups.filter { ids.contains($0.id) })
         case .none:
+            // "siblings" vs "Three Siblings": try the singular/plural form.
+            let alt = phrase.hasSuffix("s") ? String(phrase.dropLast()) : phrase + "s"
+            if alt != phrase, case .unique(let id) = NameMatcher.match(alt, in: candidates),
+               let g = groups.first(where: { $0.id == id }) {
+                return .resolved(g)
+            }
             return .notFound(name)
+        }
+    }
+
+    // MARK: - Parser vocabulary
+
+    func personRefs() -> [PersonRef] { activeContacts().map(\.personRef) }
+    func groupRefs() -> [GroupRef] { allGroups().map(\.groupRef) }
+
+    // MARK: - Learning from corrections
+    // Called when the user picks the right person or group for a phrase in the
+    // preview. Runs inside the same undo step as the log it belongs to.
+
+    /// Remember that `phrase` means these people. "my sister" sets the
+    /// relationship fact instead of an alias, so it shows on their page.
+    func learn(_ phrase: String, means contacts: [Contact]) {
+        let people = uniqued(contacts)
+        guard !people.isEmpty else { return }
+        let lower = phrase.trimmingCharacters(in: .whitespaces).lowercased()
+        if let term = Self.relationshipTerm(in: lower), Relationships.pluralMembers(term) == nil,
+           let canonical = Relationships.canonical(term), people.count == 1 {
+            changeFact("relationship", .append(canonical), for: people, convertToList: true)
+            return
+        }
+        // Skip phrases that are just (part of) the person's own name.
+        if people.count == 1, NameMatcher.match(lower, in: [NameCandidate(id: people[0].id, name: people[0].name)]) != .none {
+            return
+        }
+        let old = people.map { ($0, $0.aliases) }
+        for c in people { c.addAlias(lower) }
+        commit("Remember “\(lower)”", message: "Orbit will remember “\(lower)” means \(names(people))", contacts: people) {
+            for (c, value) in old { c.aliases = value }
+        }
+    }
+
+    func learn(_ phrase: String, means group: Constellation) {
+        let lower = phrase.trimmingCharacters(in: .whitespaces).lowercased()
+        guard lower != group.name.lowercased() else { return }
+        let old = group.aliases
+        group.addAlias(lower)
+        commit("Remember “\(lower)”", message: "Orbit will remember “\(lower)” means ✦ \(group.name)", contacts: group.contacts ?? []) {
+            group.aliases = old
+        }
+    }
+
+    /// Replace a person's learned aliases (contact form).
+    func setAliases(_ aliases: [String], for contact: Contact) {
+        let old = contact.aliases
+        contact.aliases = ""
+        for a in aliases { contact.addAlias(a) }
+        commit("Edit nicknames", message: "Saved nicknames for \(contact.name)", contacts: [contact]) {
+            contact.aliases = old
         }
     }
 
@@ -392,6 +492,8 @@ final class OrbitStore {
 
     enum FactChange {
         case set(String)
+        /// Replace with a list ("kids: Ava, Leo").
+        case setList([String])
         case append(String)
         case remove(String)
     }
@@ -443,6 +545,19 @@ final class OrbitStore {
                     a.appendValue(value)
                     created.append(a)
                 }
+            case .setList(let values):
+                let encoded = Self.encodeList(values)
+                if let existing {
+                    existing.isArray = true
+                    existing.value = encoded
+                    existing.modifiedAt = Date()
+                    if let category { existing.category = category }
+                } else {
+                    let a = Artifact(key: key, value: encoded, isArray: true, category: category)
+                    a.contact = c
+                    context.insert(a)
+                    created.append(a)
+                }
             case .remove(let value):
                 existing?.removeValue(value)
             }
@@ -451,6 +566,7 @@ final class OrbitStore {
         let message: String
         switch change {
         case .set(let v): message = "\(key): \(v) for \(names(people))"
+        case .setList(let vs): message = "\(key): \(vs.joined(separator: ", ")) for \(names(people))"
         case .append(let v): message = "Added \(v) to \(key) for \(names(people))"
         case .remove(let v): message = "Removed \(v) from \(key) for \(names(people))"
         }
@@ -511,6 +627,29 @@ final class OrbitStore {
     func deleteFact(_ rawKey: String, for contacts: [Contact]) {
         let (_, key) = Self.parseCategoryAndKey(rawKey)
         deleteFacts(uniqued(contacts).compactMap { fact(key, on: $0) })
+    }
+
+    /// Save facts from the palette. `drafts` pairs each fact with its person.
+    func saveFacts(_ drafts: [(FactDraft, Contact)]) {
+        guard !drafts.isEmpty else { return }
+        let label = drafts.count == 1 ? "Save \(drafts[0].0.key)" : "Save \(drafts.count) facts"
+        let message = drafts.count == 1
+            ? "Saved \(drafts[0].0.summary) for \(drafts[0].1.name)"
+            : "Saved \(drafts.count) facts"
+        grouped(label, message: message) {
+            for (draft, contact) in drafts {
+                switch draft.mode {
+                case .append:
+                    for v in draft.values { changeFact(draft.key, .append(v), for: [contact], convertToList: true) }
+                case .set:
+                    if draft.values.count > 1 {
+                        changeFact(draft.key, .setList(draft.values), for: [contact])
+                    } else if let v = draft.values.first {
+                        changeFact(draft.key, .set(v), for: [contact])
+                    }
+                }
+            }
+        }
     }
 
     func fact(_ key: String, on contact: Contact) -> Artifact? {
