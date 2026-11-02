@@ -1,6 +1,13 @@
 import XCTest
+// Works both as the SwiftPM test target (module OrbitCore) and as an Xcode
+// unit-test target hosted by the app (module Orbit).
+#if canImport(OrbitCore)
 @testable import OrbitCore
+#else
+@testable import Orbit
+#endif
 
+@MainActor
 final class CaptureParserTests: XCTestCase {
     let people = ["Sarah Connor", "Sam Okafor", "Sam Lee", "Tom Baker", "Mum"]
     let groups = ["Family", "Book Club"]

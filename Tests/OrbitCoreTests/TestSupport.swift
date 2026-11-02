@@ -1,6 +1,13 @@
 import Foundation
+// Works both as the SwiftPM test target (module OrbitCore) and as an Xcode
+// unit-test target hosted by the app (module Orbit).
+#if canImport(OrbitCore)
 @testable import OrbitCore
+#else
+@testable import Orbit
+#endif
 
+@MainActor
 enum TestClock {
     static var calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)

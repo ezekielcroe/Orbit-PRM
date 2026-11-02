@@ -1,6 +1,13 @@
 import XCTest
+// Works both as the SwiftPM test target (module OrbitCore) and as an Xcode
+// unit-test target hosted by the app (module Orbit).
+#if canImport(OrbitCore)
 @testable import OrbitCore
+#else
+@testable import Orbit
+#endif
 
+@MainActor
 final class NameMatcherTests: XCTestCase {
     let a = NameCandidate(id: UUID(), name: "Sarah Connor")
     let b = NameCandidate(id: UUID(), name: "Sam Okafor")
@@ -25,6 +32,7 @@ final class NameMatcherTests: XCTestCase {
     }
 }
 
+@MainActor
 final class ActionVocabularyTests: XCTestCase {
     func testCanonical() {
         XCTAssertEqual(ActionVocabulary.canonical("text"), "Message")
@@ -46,6 +54,7 @@ final class ActionVocabularyTests: XCTestCase {
     }
 }
 
+@MainActor
 final class AttentionEngineTests: XCTestCase {
     let now = TestClock.now
     let cal = TestClock.calendar
@@ -116,6 +125,7 @@ final class AttentionEngineTests: XCTestCase {
     }
 }
 
+@MainActor
 final class BirthdayTests: XCTestCase {
     let cal = TestClock.calendar
 
